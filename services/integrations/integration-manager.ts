@@ -241,3 +241,36 @@ export class IntegrationManager {
 
 // Singleton instance
 export const integrationManager = new IntegrationManager()
+
+import { WhatsAppMessageSender, TelegramMessageSender, MessageResult } from './message-sender'
+
+// Добавляем методы в класс IntegrationManager
+export interface IntegrationManagerExtensions {
+  sendMessage(integrationId: string, integrationType: IntegrationType, recipient: string, message: string): Promise<MessageResult>
+}
+
+// Расширяем существующий класс
+Object.assign(IntegrationManager.prototype, {
+  async sendMessage(integrationId: string, integrationType: IntegrationType, recipient: string, message: string): Promise<MessageResult> {
+    try {
+      if (integrationType === IntegrationType.WHATSAPP) {
+        const sender = new WhatsAppMessageSender()
+        return await sender.sendMessage(integrationId, recipient, message)
+      } else if (integrationType === IntegrationType.TELEGRAM) {
+        const sender = new TelegramMessageSender()
+        return await sender.sendMessage(integrationId, recipient, message)
+      } else {
+        throw new Error(`Message sending not supported for ${integrationType}`)
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date()
+      }
+    }
+  }
+} as IntegrationManagerExtensions)
+
+// Обновляем тип singleton instance
+export const integrationManagerExtended = integrationManager as IntegrationManager & IntegrationManagerExtensions
