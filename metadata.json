@@ -1,0 +1,5 @@
+{
+  "name": "TenderAI",
+  "description": "A unified system for managing procurement and suppliers with the ability to connect any neural network agents (ChatGPT, Gemini, etc.), automated agents, a database, and RPA modules for sending/receiving commercial proposals.",
+  "requestFramePermissions": []
+}
