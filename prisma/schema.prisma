@@ -67,6 +67,13 @@ model Company {
   communicationChannels  CommunicationChannel[]
   requests               ClientRequest[]
 
+  // New integration relations
+  platformIntegrations   PlatformIntegration[]
+  telegramIntegrations   TelegramIntegration[]
+  whatsappIntegrations   WhatsAppIntegration[]
+  emailIntegrations      EmailIntegration[]
+  integrationLogs        IntegrationLog[]
+
   @@map("companies")
 }
 
@@ -370,4 +377,229 @@ enum AgentModel {
   CHATGPT_4
   YANDEX_GPT
   GIGA_CHAT
+}
+
+// === ИНТЕГРАЦИИ ===
+
+// Платформы закупок с детальными настройками
+model PlatformIntegration {
+  id                String   @id @default(cuid())
+  companyId         String
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Идентификация платформы
+  platformType      PlatformType
+  platformName      String   // zakupki.gov.ru, sberbank-ast.ru, etc.
+  baseUrl           String
+  
+  // Авторизация
+  authType          AuthType @default(CREDENTIALS)
+  loginUrl          String?
+  
+  // Учетные данные (зашифрованы)
+  encryptedCredentials Json  // { username, password, certificates, etc. }
+  
+  // Сессия
+  sessionData       Json?    // cookies, tokens, etc.
+  sessionExpiresAt  DateTime?
+  lastLoginAt       DateTime?
+  loginAttempts     Int      @default(0)
+  
+  // Статус
+  status            IntegrationStatus @default(DISCONNECTED)
+  lastError         String?
+  lastCheckedAt     DateTime?
+  
+  // Настройки автоматизации
+  autoLogin         Boolean  @default(false)
+  checkInterval     Int      @default(3600) // seconds
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("platform_integrations")
+}
+
+// Telegram веб-сессии (Web Telegram)
+model TelegramIntegration {
+  id                String   @id @default(cuid())
+  companyId         String
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Веб-сессия данные (зашифрованы)
+  encryptedWebSession String?   // Зашифрованные cookies, localStorage, etc.
+  sessionUsername     String?   // Username из сессии
+  displayName         String?   // Отображаемое имя
+  
+  // QR-код для подключения (временные данные)
+  qrCodeData          String?   // base64 QR-код
+  qrCodeExpiresAt     DateTime?
+  connectionStatus    String?   // waiting_qr, scanning, connecting, connected
+  
+  // Веб-настройки
+  webSessionUrl       String?   // URL веб-версии
+  userAgent           String?   // User agent для браузера
+  
+  // Статус
+  status            IntegrationStatus @default(DISCONNECTED)
+  lastError         String?
+  lastCheckedAt     DateTime?
+  
+  // Метрики
+  messagesReceived  Int      @default(0)
+  messagesSent      Int      @default(0)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("telegram_integrations")
+}
+
+// WhatsApp Business интеграции  
+model WhatsAppIntegration {
+  id                String   @id @default(cuid())
+  companyId         String
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // WhatsApp Business API настройки
+  phoneNumberId     String   // WhatsApp Business Phone Number ID
+  businessAccountId String   // WhatsApp Business Account ID
+  accessToken       String   // зашифрован
+  
+  // Webhook настройки
+  webhookUrl        String?
+  verifyToken       String?  // зашифрован
+  
+  // Номер телефона
+  phoneNumber       String   // +7XXXXXXXXXX
+  displayName       String?
+  
+  // Статус
+  status            IntegrationStatus @default(DISCONNECTED)
+  lastError         String?
+  lastCheckedAt     DateTime?
+  
+  // Метрики
+  messagesReceived  Int      @default(0)
+  messagesSent      Int      @default(0)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("whatsapp_integrations")
+}
+
+// Email интеграции
+model EmailIntegration {
+  id                String   @id @default(cuid())
+  companyId         String
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Основные настройки
+  emailAddress      String
+  displayName       String?
+  
+  // SMTP настройки (исходящая почта)
+  smtpHost          String
+  smtpPort          Int
+  smtpSecure        Boolean  @default(true) // SSL/TLS
+  smtpUsername      String
+  smtpPassword      String   // зашифрован
+  
+  // IMAP настройки (входящая почта)
+  imapHost          String?
+  imapPort          Int?
+  imapSecure        Boolean  @default(true)
+  imapUsername      String?
+  imapPassword      String?  // зашифрован
+  
+  // OAuth2 настройки (для Gmail, Outlook)
+  oauth2Provider    String?  // gmail, outlook, etc.
+  oauth2ClientId    String?
+  oauth2ClientSecret String? // зашифрован
+  oauth2RefreshToken String? // зашифрован
+  oauth2AccessToken  String? // зашифрован
+  oauth2ExpiresAt    DateTime?
+  
+  // Статус
+  status            IntegrationStatus @default(DISCONNECTED)
+  lastError         String?
+  lastCheckedAt     DateTime?
+  
+  // Метрики
+  emailsReceived    Int      @default(0)
+  emailsSent        Int      @default(0)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("email_integrations")
+}
+
+// Логи интеграций для мониторинга
+model IntegrationLog {
+  id            String      @id @default(cuid())
+  companyId     String
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  integrationType IntegrationType
+  integrationId   String      // ID соответствующей интеграции
+  
+  action        String      // login, send_message, check_status, etc.
+  status        LogStatus   @default(SUCCESS)
+  message       String?
+  errorDetails  Json?       // детали ошибки
+  
+  // Метаданные
+  userAgent     String?
+  ipAddress     String?
+  duration      Int?        // milliseconds
+  
+  createdAt     DateTime    @default(now())
+
+  @@map("integration_logs")
+}
+
+// Новые enum'ы для интеграций
+enum PlatformType {
+  ZAKUPKI_GOV_RU          // Единая информационная система
+  SBERBANK_AST            // Сбербанк-АСТ
+  ROSELTORG               // Росэлторг  
+  ETP_GPB                 // ЭТП ГПБ
+  TEKTORG                 // ТЭК-Торг
+  B2B_CENTER              // B2B-Center
+  RTS_TENDER              // РТС-тендер
+  FABRIKANT               // Фабрикант
+  CUSTOM                  // Пользовательская площадка
+}
+
+enum AuthType {
+  CREDENTIALS             // Логин/пароль
+  CERTIFICATE            // ЭП сертификат
+  OAUTH2                 // OAuth2
+  API_KEY                // API ключ
+  CUSTOM                 // Пользовательский способ
+}
+
+enum IntegrationStatus {
+  CONNECTED              // Подключено и работает
+  DISCONNECTED           // Отключено
+  CONNECTING             // Процесс подключения
+  ERROR                  // Ошибка подключения
+  EXPIRED                // Сессия истекла
+  SUSPENDED              // Приостановлено
+}
+
+enum IntegrationType {
+  PLATFORM               // Площадка закупок
+  TELEGRAM               // Telegram
+  WHATSAPP               // WhatsApp
+  EMAIL                  // Email
+}
+
+enum LogStatus {
+  SUCCESS                // Успешно
+  ERROR                  // Ошибка
+  WARNING                // Предупреждение
+  INFO                   // Информация
 }
