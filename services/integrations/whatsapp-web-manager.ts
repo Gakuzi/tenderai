@@ -7,9 +7,480 @@ import puppeteer, { Browser, Page } from 'puppeteer'
 export class WhatsAppWebManager extends WebSessionManager {
   private browser: Browser | null = null
   private page: Page | null = null
+  private isAuthenticated = false
+  private authenticationPromise: Promise<boolean> | null = null
+  private static instances = new Map<string, WhatsAppWebManager>()
 
   constructor(companyId: string) {
     super(companyId, IntegrationType.WHATSAPP)
+  }
+  
+  // Singleton pattern для каждой компании
+  static getInstance(companyId: string): WhatsAppWebManager {
+    if (!WhatsAppWebManager.instances.has(companyId)) {
+      WhatsAppWebManager.instances.set(companyId, new WhatsAppWebManager(companyId))
+    }
+    return WhatsAppWebManager.instances.get(companyId)!
+  }
+  
+  // Проверка, что сессия активна
+  private async checkSessionActive(): Promise<boolean> {
+    if (!this.page || !this.browser) return false
+    
+    try {
+      // Проверяем, открыта ли страница
+      const url = this.page.url()
+      if (!url.includes('web.whatsapp.com')) return false
+      
+      // Проверяем, не показывается ли QR-код
+      const qrExists = await this.page.$('canvas[aria-label*="QR"], canvas[aria-label*="Scan"]')
+      return !qrExists // Если QR-кода нет, значит авторизованы
+      
+    } catch (error) {
+      return false
+    }
+  }
+  
+  // Инициализация или восстановление долгоживущей сессии
+  async ensureSession(integrationId: string): Promise<boolean> {
+    // Если уже авторизованы и сессия активна
+    if (this.isAuthenticated && await this.checkSessionActive()) {
+      console.log('✅ Используем существующую сессию WhatsApp')
+      return true
+    }
+    
+    // Если уже идет процесс авторизации, ждем его
+    if (this.authenticationPromise) {
+      console.log('⏳ Ожидаем завершения авторизации...')
+      return await this.authenticationPromise
+    }
+    
+    // Запускаем новую авторизацию
+    this.authenticationPromise = this.initializePersistentSession(integrationId)
+    
+    try {
+      const result = await this.authenticationPromise
+      this.isAuthenticated = result
+      return result
+    } finally {
+      this.authenticationPromise = null
+    }
+  }
+
+  // Инициализация долгоживущей сессии с автоматическим восстановлением
+  async initializePersistentSession(integrationId: string): Promise<boolean> {
+    try {
+      console.log('🔄 Инициализация долгоживущей сессии WhatsApp...')
+      
+      // Сначала пытаемся восстановить существующую сессию
+      const sessionRestored = await this.tryRestorePersistentSession(integrationId)
+      if (sessionRestored) {
+        console.log('✅ Сессия успешно восстановлена из сохраненных данных')
+        this.startHealthMonitoring(integrationId)
+        return true
+      }
+      
+      console.log('⚠️ Не удалось восстановить сессию, запускаем новую авторизацию...')
+      
+      // Если восстановить не удалось, запускаем новую авторизацию
+      const qrCode = await this.generateQRCode(integrationId)
+      const authResult = await this.waitForAuthentication(integrationId)
+      
+      if (authResult) {
+        console.log('✅ Новая сессия создана успешно')
+        this.startHealthMonitoring(integrationId)
+        return true
+      }
+      
+      return false
+      
+    } catch (error) {
+      console.error('❌ Ошибка инициализации долгоживущей сессии:', error)
+      
+      await prisma.integrationLog.create({
+        data: {
+          companyId: this.companyId,
+          integrationType: IntegrationType.WHATSAPP,
+          integrationId,
+          action: 'persistent_session_init_failed',
+          status: 'ERROR',
+          message: `Failed to initialize persistent session: ${error}`,
+          errorDetails: { error: error instanceof Error ? error.message : String(error) }
+        }
+      })
+      
+      return false
+    }
+  }
+
+  // Попытка восстановления долгоживущей сессии
+  private async tryRestorePersistentSession(integrationId: string): Promise<boolean> {
+    try {
+      console.log('🔍 Пытаемся восстановить долгоживущую сессию...')
+      
+      // Загружаем сохраненную сессию
+      const sessionData = await this.loadSession(integrationId)
+      if (!sessionData) {
+        console.log('❌ Сохраненная сессия не найдена')
+        return false
+      }
+      
+      // Проверяем, не истекла ли сессия (максимум 90 дней)
+      const lastActivityTime = sessionData.lastActivity instanceof Date ? 
+        sessionData.lastActivity.getTime() : 
+        new Date(sessionData.lastActivity).getTime()
+      const sessionAge = Date.now() - lastActivityTime
+      const maxAge = 90 * 24 * 60 * 60 * 1000 // 90 дней в миллисекундах
+      
+      if (sessionAge > maxAge) {
+        console.log('⚠️ Сохраненная сессия слишком старая, требуется новая авторизация')
+        return false
+      }
+      
+      console.log(`📅 Возраст сессии: ${Math.round(sessionAge / (24 * 60 * 60 * 1000))} дней`)
+      
+      // Запускаем браузер в headless режиме для долгоживущей сессии
+      this.browser = await puppeteer.launch({
+        headless: true, // Для долгоживущих сессий используем headless
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor'
+        ],
+        defaultViewport: sessionData.viewport
+      })
+      
+      this.page = await this.browser.newPage()
+      
+      // Восстанавливаем сессию
+      await this.restoreSessionInBrowser(sessionData)
+      
+      // Проверяем, что сессия действительно работает
+      const isValid = await this.validateRestoredSession()
+      
+      if (!isValid) {
+        console.log('❌ Восстановленная сессия не валидна')
+        await this.cleanup()
+        return false
+      }
+      
+      console.log('✅ Долгоживущая сессия успешно восстановлена')
+      
+      // Обновляем информацию в базе данных
+      await prisma.whatsAppIntegration.update({
+        where: { id: integrationId },
+        data: {
+          status: IntegrationStatus.CONNECTED,
+          connectionStatus: 'connected',
+          lastCheckedAt: new Date()
+        }
+      })
+      
+      return true
+      
+    } catch (error) {
+      console.error('❌ Ошибка восстановления сессии:', error)
+      
+      // Очищаем ресурсы при ошибке
+      await this.cleanup()
+      return false
+    }
+  }
+
+  // Восстановление сессии в браузере
+  private async restoreSessionInBrowser(sessionData: WebSession): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized')
+    
+    console.log('🔄 Восстанавливаем сессию в браузере...')
+    
+    // 1. Устанавливаем user agent
+    await this.page.setUserAgent(sessionData.userAgent)
+    
+    // 2. Устанавливаем cookies ДО перехода на страницу
+    if (sessionData.cookies && sessionData.cookies.length > 0) {
+      console.log(`📥 Восстанавливаем ${sessionData.cookies.length} cookies`)
+      await this.page.setCookie(...sessionData.cookies)
+    }
+    
+    // 3. Настраиваем localStorage и sessionStorage для всех новых документов
+    await this.page.evaluateOnNewDocument((data) => {
+      if (data.localStorage) {
+        Object.keys(data.localStorage).forEach(key => {
+          try {
+            localStorage.setItem(key, data.localStorage[key])
+          } catch (e) {
+            console.log('Ошибка установки localStorage:', key, e)
+          }
+        })
+      }
+      if (data.sessionStorage) {
+        Object.keys(data.sessionStorage).forEach(key => {
+          try {
+            sessionStorage.setItem(key, data.sessionStorage[key])
+          } catch (e) {
+            console.log('Ошибка установки sessionStorage:', key, e)
+          }
+        })
+      }
+    }, sessionData)
+    
+    // 4. Переходим на WhatsApp Web
+    console.log('🌐 Переходим на WhatsApp Web...')
+    await this.page.goto('https://web.whatsapp.com', { 
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
+    })
+    
+    // 5. Ждем частичной загрузки и дополнительно восстанавливаем storage
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    
+    await this.page.evaluate((data) => {
+      if (data.localStorage) {
+        Object.keys(data.localStorage).forEach(key => {
+          try {
+            localStorage.setItem(key, data.localStorage[key])
+          } catch (e) {}
+        })
+      }
+      if (data.sessionStorage) {
+        Object.keys(data.sessionStorage).forEach(key => {
+          try {
+            sessionStorage.setItem(key, data.sessionStorage[key])
+          } catch (e) {}
+        })
+      }
+    }, sessionData)
+    
+    console.log('✅ Сессия восстановлена в браузере')
+  }
+
+  // Валидация восстановленной сессии
+  private async validateRestoredSession(): Promise<boolean> {
+    if (!this.page) return false
+    
+    try {
+      console.log('🔍 Проверяем валидность восстановленной сессии...')
+      
+      // Ждем до 30 секунд для полной загрузки
+      await new Promise(resolve => setTimeout(resolve, 5000))
+      
+      // Проверяем, не показывается ли QR-код
+      const qrExists = await this.page.$('canvas[aria-label*="QR"], canvas[aria-label*="Scan"]')
+      if (qrExists) {
+        console.log('❌ QR-код найден - сессия не валидна')
+        return false
+      }
+      
+      // Ищем признаки успешно загруженного интерфейса
+      const interfaceSelectors = [
+        '._2QgSC', 
+        '[data-testid="chat-list"]',
+        '.app-wrapper-web',
+        '[role="main"]',
+        '[data-testid="side"]'
+      ]
+      
+      let interfaceFound = false
+      for (const selector of interfaceSelectors) {
+        try {
+          await this.page.waitForSelector(selector, { timeout: 10000 })
+          console.log(`✅ Найден элемент интерфейса: ${selector}`)
+          interfaceFound = true
+          break
+        } catch (e) {
+          continue
+        }
+      }
+      
+      if (!interfaceFound) {
+        console.log('⚠️ Основной интерфейс не найден, но QR-кода тоже нет. Возможно, загружается...')
+        // Даем еще немного времени
+        await new Promise(resolve => setTimeout(resolve, 10000))
+        
+        // Повторная проверка QR-кода
+        const qrExistsAgain = await this.page.$('canvas[aria-label*="QR"], canvas[aria-label*="Scan"]')
+        if (qrExistsAgain) {
+          console.log('❌ QR-код появился при повторной проверке - сессия не валидна')
+          return false
+        }
+      }
+      
+      console.log('✅ Сессия валидна - нет QR-кода, интерфейс доступен')
+      return true
+      
+    } catch (error) {
+      console.error('❌ Ошибка валидации сессии:', error)
+      return false
+    }
+  }
+
+  // Мониторинг здоровья сессии
+  private startHealthMonitoring(integrationId: string): void {
+    console.log('💓 Запускаем мониторинг здоровья сессии...')
+    
+    // Проверяем здоровье каждые 5 минут
+    setInterval(async () => {
+      try {
+        const isHealthy = await this.performHealthCheck(integrationId)
+        if (!isHealthy) {
+          console.log('⚠️ Сессия нездорова, пытаемся восстановить...')
+          await this.handleUnhealthySession(integrationId)
+        }
+      } catch (error) {
+        console.error('❌ Ошибка проверки здоровья сессии:', error)
+      }
+    }, 5 * 60 * 1000) // 5 минут
+    
+    // Автосохранение каждые 10 минут
+    setInterval(async () => {
+      try {
+        await this.autoSaveSession(integrationId)
+      } catch (error) {
+        console.error('❌ Ошибка автосохранения сессии:', error)
+      }
+    }, 10 * 60 * 1000) // 10 минут
+  }
+
+  // Проверка здоровья сессии
+  private async performHealthCheck(integrationId: string): Promise<boolean> {
+    if (!this.page || !this.browser) {
+      console.log('❌ Браузер или страница не активны')
+      return false
+    }
+    
+    try {
+      // Проверяем, что страница отвечает
+      const title = await this.page.title()
+      if (!title || title.includes('WhatsApp Web') === false) {
+        console.log(`⚠️ Неожиданный title страницы: ${title}`)
+        return false
+      }
+      
+      // Проверяем, что нет QR-кода
+      const qrExists = await this.page.$('canvas[aria-label*="QR"], canvas[aria-label*="Scan"]')
+      if (qrExists) {
+        console.log('❌ Найден QR-код - сессия потеряна')
+        return false
+      }
+      
+      // Обновляем время последней проверки
+      await prisma.whatsAppIntegration.update({
+        where: { id: integrationId },
+        data: {
+          lastCheckedAt: new Date(),
+          connectionStatus: 'connected'
+        }
+      })
+      
+      console.log('✅ Health check пройден')
+      return true
+      
+    } catch (error) {
+      console.error('❌ Ошибка health check:', error)
+      return false
+    }
+  }
+
+  // Обработка нездоровой сессии
+  private async handleUnhealthySession(integrationId: string): Promise<void> {
+    console.log('🔧 Обрабатываем нездоровую сессию...')
+    
+    try {
+      // Обновляем статус
+      await prisma.whatsAppIntegration.update({
+        where: { id: integrationId },
+        data: {
+          connectionStatus: 'reconnecting',
+          lastError: 'Session became unhealthy, attempting to reconnect'
+        }
+      })
+      
+      // Очищаем текущие ресурсы
+      await this.cleanup()
+      
+      // Сбрасываем флаги
+      this.isAuthenticated = false
+      
+      // Пытаемся восстановить сессию
+      const restored = await this.tryRestorePersistentSession(integrationId)
+      
+      if (!restored) {
+        console.log('⚠️ Не удалось восстановить сессию, требуется новая авторизация')
+        
+        await prisma.whatsAppIntegration.update({
+          where: { id: integrationId },
+          data: {
+            status: IntegrationStatus.ERROR,
+            connectionStatus: 'authentication_required',
+            lastError: 'Session lost, QR code authentication required'
+          }
+        })
+        
+        // Логируем событие
+        await prisma.integrationLog.create({
+          data: {
+            companyId: this.companyId,
+            integrationType: IntegrationType.WHATSAPP,
+            integrationId,
+            action: 'session_lost',
+            status: 'WARNING',
+            message: 'WhatsApp session lost, requires re-authentication'
+          }
+        })
+      } else {
+        console.log('✅ Сессия успешно восстановлена')
+        this.isAuthenticated = true
+      }
+      
+    } catch (error) {
+      console.error('❌ Ошибка обработки нездоровой сессии:', error)
+      
+      await prisma.whatsAppIntegration.update({
+        where: { id: integrationId },
+        data: {
+          status: IntegrationStatus.ERROR,
+          connectionStatus: 'error',
+          lastError: `Failed to handle unhealthy session: ${error}`
+        }
+      })
+    }
+  }
+
+  // Автоматическое сохранение сессии
+  private async autoSaveSession(integrationId: string): Promise<void> {
+    if (!this.page || !this.isAuthenticated) {
+      return
+    }
+    
+    try {
+      console.log('💾 Автосохранение сессии...')
+      
+      const sessionData: WebSession = {
+        sessionId: `whatsapp_${Date.now()}`,
+        cookies: await this.page.cookies(),
+        localStorage: await this.page.evaluate(() => ({
+          ...localStorage
+        })),
+        sessionStorage: await this.page.evaluate(() => ({
+          ...sessionStorage
+        })),
+        userAgent: await this.page.evaluate(() => navigator.userAgent),
+        viewport: this.page.viewport() || { width: 1366, height: 768 },
+        lastActivity: new Date()
+      }
+      
+      await this.saveSession(integrationId, sessionData)
+      console.log('✅ Сессия автоматически сохранена')
+      
+    } catch (error) {
+      console.error('❌ Ошибка автосохранения сессии:', error)
+    }
   }
 
   async generateQRCode(integrationId: string): Promise<string> {
@@ -217,6 +688,10 @@ export class WhatsAppWebManager extends WebSessionManager {
         }
       })
 
+      // Запускаем мониторинг здоровья для долгоживущей сессии
+      console.log('💓 Запускаем мониторинг здоровья сессии...')
+      this.startHealthMonitoring(integrationId)
+      
       return true
     } catch (error) {
       console.error('WhatsApp authentication failed:', error)
@@ -230,123 +705,61 @@ export class WhatsAppWebManager extends WebSessionManager {
         }
       })
 
-      return false
-    } finally {
-      // Закрываем браузер
+      // При ошибке все же закрываем браузер
       if (this.browser) {
         await this.browser.close()
         this.browser = null
         this.page = null
       }
+      
+      return false
     }
+    // НЕ закрываем браузер в finally - сохраняем долгоживущую сессию!
   }
 
   async sendMessage(integrationId: string, recipient: string, message: string): Promise<boolean> {
-    console.log(`Sending WhatsApp message to ${recipient}: ${message}`)
+    console.log(`💬 Отправка WhatsApp сообщения контакту ${recipient}: ${message}`)
     
     try {
-      // Загружаем сохраненную сессию
-      const sessionData = await this.loadSession(integrationId)
-      if (!sessionData) {
-        throw new Error('No saved session found. Please authenticate first.')
-      }
-
-      // Запускаем новый браузер для отправки сообщения
-      this.browser = await puppeteer.launch({
-        headless: false, // Для отладки
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage'
-        ]
-      })
-
-      this.page = await this.browser.newPage()
-      
-      console.log('Восстанавливаем сохраненную сессию WhatsApp...')
-      
-      // 1. Устанавливаем user agent и viewport
-      await this.page.setUserAgent(sessionData.userAgent)
-      await this.page.setViewport(sessionData.viewport)
-      
-      // 2. Устанавливаем cookies ДО перехода на страницу
-      if (sessionData.cookies && sessionData.cookies.length > 0) {
-        console.log(`Восстанавливаем ${sessionData.cookies.length} cookies`)
-        await this.page.setCookie(...sessionData.cookies)
+      // Убеждаемся, что долгоживущая сессия активна
+      const sessionReady = await this.ensureSession(integrationId)
+      if (!sessionReady) {
+        throw new Error('Не удалось установить сессию WhatsApp. Пожалуйста, пройдите авторизацию.')
       }
       
-      // 3. Настраиваем localStorage и sessionStorage для всех новых документов
-      await this.page.evaluateOnNewDocument((data) => {
-        console.log('Восстанавливаем localStorage и sessionStorage...')
-        if (data.localStorage) {
-          Object.keys(data.localStorage).forEach(key => {
-            try {
-              localStorage.setItem(key, data.localStorage[key])
-            } catch (e) {
-              console.log('Ошибка установки localStorage:', key, e)
-            }
-          })
-        }
-        if (data.sessionStorage) {
-          Object.keys(data.sessionStorage).forEach(key => {
-            try {
-              sessionStorage.setItem(key, data.sessionStorage[key])
-            } catch (e) {
-              console.log('Ошибка установки sessionStorage:', key, e)
-            }
-          })
-        }
-      }, sessionData)
-      
-      // 4. Переходим на WhatsApp Web с восстановленной сессией
-      console.log('Переходим на WhatsApp Web с восстановленной сессией...')
-      await this.page.goto('https://web.whatsapp.com', { 
-        waitUntil: 'domcontentloaded',
-        timeout: 60000
-      })
-      
-      // Ждем 3 секунды для полной загрузки
-      await new Promise(resolve => setTimeout(resolve, 3000))
-      
-      // Дополнительно восстанавливаем localStorage после загрузки
-      try {
-        await this.page.evaluate((data) => {
-          if (data.localStorage) {
-            Object.keys(data.localStorage).forEach(key => {
-              try {
-                localStorage.setItem(key, data.localStorage[key])
-              } catch (e) {}
-            })
-          }
-          if (data.sessionStorage) {
-            Object.keys(data.sessionStorage).forEach(key => {
-              try {
-                sessionStorage.setItem(key, data.sessionStorage[key])
-              } catch (e) {}
-            })
-          }
-        }, sessionData)
-        console.log('Дополнительно восстановили localStorage')
-      } catch (e) {
-        console.log('Ошибка дополнительного восстановления:', e)
+      if (!this.page) {
+        throw new Error('Страница браузера не инициализирована')
       }
       
-      // Проверяем, на какой странице мы оказались
+      console.log('🔍 Используем долгоживущую сессию для отправки сообщения')
+      
+      // Проверяем, что мы на правильной странице и сессия активна
       const currentUrl = this.page.url()
-      console.log(`Текущий URL: ${currentUrl}`)
+      if (!currentUrl.includes('web.whatsapp.com')) {
+        console.log('🌐 Переходим на WhatsApp Web...')
+        await this.page.goto('https://web.whatsapp.com', { 
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        })
+        await new Promise(resolve => setTimeout(resolve, 3000))
+      }
       
-      // Если показывается QR-код, значит сессия не восстановилась
+      // Проверяем, что сессия все еще валидна
       const qrExists = await this.page.$('canvas[aria-label*="QR"], canvas[aria-label*="Scan"]')
       if (qrExists) {
-        throw new Error('Сессия истекла - нужна повторная авторизация')
+        throw new Error('Сессия WhatsApp истекла - нужна повторная авторизация')
       }
       
       // Ждем загрузки интерфейса WhatsApp
-      await this.page.waitForSelector('._2QgSC, [data-testid="chat-list"], .app-wrapper-web', { 
-        timeout: 30000 
-      })
+      try {
+        await this.page.waitForSelector('._2QgSC, [data-testid="chat-list"], .app-wrapper-web', { 
+          timeout: 15000 
+        })
+      } catch (e) {
+        console.log('⚠️ Основной селектор не найден, продолжаем...')
+      }
       
-      console.log('WhatsApp interface loaded successfully, searching for contact...')
+      console.log('🔍 Интерфейс WhatsApp загружен, ищем контакт...')
       
       // Ищем контакт или создаем новый чат
       await this.searchAndOpenChat(recipient)
@@ -354,7 +767,7 @@ export class WhatsAppWebManager extends WebSessionManager {
       // Отправляем сообщение
       await this.sendMessageInChat(message)
       
-      // Логируем успешную отправку
+      // Обновляем статистику
       await prisma.whatsAppIntegration.update({
         where: { id: integrationId },
         data: {
@@ -363,11 +776,14 @@ export class WhatsAppWebManager extends WebSessionManager {
         }
       })
       
-      console.log('✅ WhatsApp message sent successfully!')
+      // Автосохранение сессии после отправки
+      await this.autoSaveSession(integrationId)
+      
+      console.log('✅ Сообщение WhatsApp успешно отправлено!')
       return true
       
     } catch (error) {
-      console.error('❌ Failed to send WhatsApp message:', error)
+      console.error('❌ Ошибка отправки сообщения WhatsApp:', error)
       
       // Логируем ошибку
       await prisma.integrationLog.create({
@@ -377,20 +793,27 @@ export class WhatsAppWebManager extends WebSessionManager {
           integrationId,
           action: 'send_message_failed',
           status: 'ERROR',
-          message: `Failed to send message to ${recipient}: ${error}`,
+          message: `Ошибка отправки сообщения ${recipient}: ${error}`,
           errorDetails: { error: error instanceof Error ? error.message : String(error) }
         }
       })
       
-      return false
-    } finally {
-      // Закрываем браузер
-      if (this.browser) {
-        await this.browser.close()
-        this.browser = null
-        this.page = null
+      // Если ошибка связана с сессией, помечаем как неавторизованные
+      if (error instanceof Error && error.message.includes('истекла')) {
+        this.isAuthenticated = false
+        await prisma.whatsAppIntegration.update({
+          where: { id: integrationId },
+          data: {
+            status: IntegrationStatus.ERROR,
+            connectionStatus: 'authentication_required',
+            lastError: 'Сессия истекла - нужна повторная авторизация'
+          }
+        })
       }
+      
+      return false
     }
+    // НЕ закрываем браузер - сохраняем долгоживущую сессию!
   }
   
   private async searchAndOpenChat(recipient: string): Promise<void> {
@@ -545,12 +968,83 @@ export class WhatsAppWebManager extends WebSessionManager {
            await this.checkSessionHealth(integrationId)
   }
 
-  // Метод для очистки ресурсов
+  // Очистка ресурсов долгоживущей сессии
   async cleanup(): Promise<void> {
-    if (this.browser) {
-      await this.browser.close()
-      this.browser = null
+    console.log('🧹 Очищаем ресурсы долгоживущей сессии WhatsApp...')
+    
+    try {
+      if (this.page) {
+        // Сохраняем сессию перед закрытием (если возможно)
+        if (this.isAuthenticated) {
+          try {
+            console.log('💾 Последнее сохранение сессии...')
+            
+            const sessionData: WebSession = {
+              sessionId: `whatsapp_cleanup_${Date.now()}`,
+              cookies: await this.page.cookies(),
+              localStorage: await this.page.evaluate(() => ({ ...localStorage })),
+              sessionStorage: await this.page.evaluate(() => ({ ...sessionStorage })),
+              userAgent: await this.page.evaluate(() => navigator.userAgent),
+              viewport: this.page.viewport() || { width: 1366, height: 768 },
+              lastActivity: new Date()
+            }
+            
+            // Получаем integrationId из контекста (если доступен)
+            // Пока сохраняем с общим ID
+            await this.saveSession('cleanup_session', sessionData)
+          } catch (e) {
+            console.log('⚠️ Не удалось сохранить сессию перед закрытием:', e)
+          }
+        }
+        
+        await this.page.close()
+        this.page = null
+      }
+      
+      if (this.browser) {
+        await this.browser.close()
+        this.browser = null
+      }
+      
+      // Сбрасываем флаги
+      this.isAuthenticated = false
+      this.authenticationPromise = null
+      
+      console.log('✅ Ресурсы успешно очищены')
+      
+    } catch (error) {
+      console.error('❌ Ошибка очистки ресурсов:', error)
+      
+      // Принудительная очистка
       this.page = null
+      this.browser = null
+      this.isAuthenticated = false
+      this.authenticationPromise = null
     }
+  }
+
+  // Полное закрытие долгоживущей сессии (для административных целей)
+  static async destroyInstance(companyId: string): Promise<void> {
+    const instance = WhatsAppWebManager.instances.get(companyId)
+    if (instance) {
+      await instance.cleanup()
+      WhatsAppWebManager.instances.delete(companyId)
+      console.log(`🗑️ Экземпляр WhatsAppWebManager для компании ${companyId} уничтожен`)
+    }
+  }
+
+  // Получение статистики всех активных сессий
+  static getActiveSessionsStats(): { [companyId: string]: { isAuthenticated: boolean, hasPage: boolean, hasBrowser: boolean } } {
+    const stats: { [companyId: string]: { isAuthenticated: boolean, hasPage: boolean, hasBrowser: boolean } } = {}
+    
+    for (const [companyId, instance] of WhatsAppWebManager.instances) {
+      stats[companyId] = {
+        isAuthenticated: instance.isAuthenticated,
+        hasPage: instance.page !== null,
+        hasBrowser: instance.browser !== null
+      }
+    }
+    
+    return stats
   }
 }

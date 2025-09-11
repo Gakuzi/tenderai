@@ -5,7 +5,8 @@ import { api } from '../services/api';
 import { ClientRequest } from '../types';
 import Spinner from '../components/Spinner';
 import Card from '../components/Card';
-import { Cpu, File, CheckCircle } from 'lucide-react';
+import MessengerManager from '../components/MessengerManager';
+import { Cpu, File, CheckCircle, MessageCircle } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
 const RequestDetail: React.FC = () => {
@@ -15,6 +16,7 @@ const RequestDetail: React.FC = () => {
   const [request, setRequest] = useState<ClientRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [agentLoading, setAgentLoading] = useState(false);
+  const [messageCount, setMessageCount] = useState(0);
 
   useEffect(() => {
     if (id) {
@@ -40,7 +42,15 @@ const RequestDetail: React.FC = () => {
   return (
     <div>
       <h1 className="text-3xl font-bold text-gray-800 dark:text-white mb-2">{t('process_request')} for {request.clientName}</h1>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">Received at: {new Date(request.receivedAt).toLocaleString()}</p>
+      <div className="flex items-center justify-between mb-6">
+        <p className="text-sm text-gray-500 dark:text-gray-400">Received at: {new Date(request.receivedAt).toLocaleString()}</p>
+        {messageCount > 0 && (
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+            <MessageCircle className="h-3 w-3 mr-1" />
+            {messageCount} переписок
+          </span>
+        )}
+      </div>
       
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
@@ -61,6 +71,18 @@ const RequestDetail: React.FC = () => {
             </Card>
         </div>
         <div className="space-y-6">
+          {/* Мессенджеры компании */}
+          {request.company && (
+            <Card>
+              <MessengerManager
+                requestId={request.id}
+                companyId={request.company.id}
+                companyName={request.company.name}
+                onMessagesUpdate={setMessageCount}
+              />
+            </Card>
+          )}
+          
           {userRole !== 'Manager' && (
             <>
               <Card>

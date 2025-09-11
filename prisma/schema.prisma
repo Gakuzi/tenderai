@@ -73,6 +73,10 @@ model Company {
   whatsappIntegrations   WhatsAppIntegration[]
   emailIntegrations      EmailIntegration[]
   integrationLogs        IntegrationLog[]
+  
+  // Communication history
+  messages               CommunicationMessage[]
+  communicationContexts  CommunicationContext[]
 
   @@map("companies")
 }
@@ -208,6 +212,10 @@ model ClientRequest {
 
   // Relations
   documents RequestDocument[]
+  
+  // Communication history
+  messages               CommunicationMessage[]
+  communicationContexts  CommunicationContext[]
 
   @@map("client_requests")
 }
@@ -234,6 +242,10 @@ model Supplier {
   email         String
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
+  
+  // Communication history
+  messages               CommunicationMessage[]
+  communicationContexts  CommunicationContext[]
 
   @@map("suppliers")
 }
@@ -605,4 +617,105 @@ enum LogStatus {
   ERROR                  // Ошибка
   WARNING                // Предупреждение
   INFO                   // Информация
+}
+
+// === ИСТОРИЯ КОММУНИКАЦИЙ ===
+
+// Сообщения в мессенджерах (общая таблица)
+model CommunicationMessage {
+  id              String   @id @default(cuid())
+  
+  // Основные данные сообщения
+  platform        CommunicationChannelType // WHATSAPP, TELEGRAM, EMAIL
+  messageId       String?  // ID сообщения в мессенджере
+  direction       MessageDirection // INCOMING, OUTGOING
+  status          MessageStatus @default(SENT)
+  
+  // Содержимое
+  subject         String?  // Тема (для email)
+  body            String   // Текст сообщения
+  hasAttachments  Boolean  @default(false)
+  attachments     Json?    // Список вложений
+  
+  // Контактная информация
+  fromContact     String   // Номер/email/username отправителя
+  toContact       String   // Номер/email/username получателя
+  fromName        String?  // Имя отправителя
+  toName          String?  // Имя получателя
+  
+  // Привязки
+  companyId       String   // От чьего имени отправлено
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  supplierId      String?  // С каким поставщиком общение
+  supplier        Supplier? @relation(fields: [supplierId], references: [id])
+  
+  clientRequestId String?  // По какой задаче
+  clientRequest   ClientRequest? @relation(fields: [clientRequestId], references: [id])
+  
+  // Метаданные
+  threadId        String?  // ID цепочки сообщений
+  replyToId       String?  // Ответ на сообщение
+  initiatedByAgent Boolean @default(false) // Инициировано ли агентом
+  isAutomated     Boolean  @default(false) // Отправлено автоматически
+  
+  // Временные метки
+  sentAt          DateTime @default(now())
+  deliveredAt     DateTime?
+  readAt          DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("communication_messages")
+}
+
+// Контекст коммуникации (к какой цели)
+model CommunicationContext {
+  id              String   @id @default(cuid())
+  
+  // Привязки
+  clientRequestId String   // К какой задаче
+  clientRequest   ClientRequest @relation(fields: [clientRequestId], references: [id], onDelete: Cascade)
+  
+  supplierId      String   // С каким поставщиком
+  supplier        Supplier @relation(fields: [supplierId], references: [id])
+  
+  companyId       String   // От чьего имени
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  // Метаданные
+  purpose         String?  // Цель обращения (запрос компредложения, уточнение ит.д.)
+  status          CommunicationContextStatus @default(ACTIVE)
+  notes           String?  // Дополнительные заметки
+  
+  // Статистика
+  messagesCount   Int      @default(0)
+  lastMessageAt   DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([clientRequestId, supplierId, companyId])
+  @@map("communication_contexts")
+}
+
+// Новые enum'ы для коммуникаций
+enum MessageDirection {
+  INCOMING               // Входящие
+  OUTGOING               // Исходящие
+}
+
+enum MessageStatus {
+  DRAFT                  // Черновик
+  SENT                   // Отправлено
+  DELIVERED              // Доставлено
+  READ                   // Прочитано
+  FAILED                 // Ошибка отправки
+}
+
+enum CommunicationContextStatus {
+  ACTIVE                 // Активное
+  COMPLETED              // Завершено
+  ON_HOLD                // Приостановлено
+  CANCELLED              // Отменено
 }

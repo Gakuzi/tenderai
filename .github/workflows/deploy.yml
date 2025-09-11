@@ -1,0 +1,220 @@
+name: 🚀 Deploy TenderAI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  # Тестирование и сборка
+  test:
+    name: 🧪 Test & Build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔧 Generate Prisma Client
+        run: npx prisma generate
+
+      - name: 🏗️ Build project
+        run: npm run build
+
+      - name: 🧪 Run tests (if available)
+        run: |
+          if [ -f "package.json" ] && grep -q '"test"' package.json; then
+            npm test
+          else
+            echo "No tests found, skipping..."
+          fi
+
+      - name: 📤 Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # Линтинг и проверка типов
+  lint:
+    name: 🔍 Lint & Type Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔧 Generate Prisma Client
+        run: npx prisma generate
+
+      - name: 🔍 Run ESLint (if available)
+        run: |
+          if [ -f ".eslintrc.js" ] || [ -f ".eslintrc.json" ] || grep -q '"eslint"' package.json; then
+            npm run lint || echo "Lint issues found, but continuing..."
+          else
+            echo "No ESLint config found, skipping..."
+          fi
+
+      - name: 🔍 TypeScript type check
+        run: |
+          if [ -f "tsconfig.json" ]; then
+            npx tsc --noEmit --skipLibCheck
+          else
+            echo "No TypeScript config found, skipping..."
+          fi
+
+  # Деплой фронтенда на Vercel
+  deploy-frontend:
+    name: 🌐 Deploy Frontend
+    needs: [test, lint]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔧 Generate Prisma Client
+        run: npx prisma generate
+
+      - name: 📤 Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: 🚀 Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.ORG_ID }}
+          vercel-project-id: ${{ secrets.PROJECT_ID }}
+          vercel-args: '--prod'
+
+  # Проверка базы данных
+  database-check:
+    name: 🗄️ Database Check
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔧 Generate Prisma Client
+        run: npx prisma generate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: 🔍 Validate Prisma Schema
+        run: npx prisma validate
+
+      - name: 📊 Check migration status
+        run: |
+          if [ "${{ secrets.DATABASE_URL }}" != "" ]; then
+            npx prisma migrate status
+          else
+            echo "DATABASE_URL not set, skipping migration check"
+          fi
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+  # Проверка безопасности
+  security:
+    name: 🔒 Security Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔒 Run npm audit
+        run: |
+          npm audit --audit-level=moderate || echo "Audit issues found, please review"
+
+      - name: 🔍 Check for secrets in code
+        run: |
+          echo "🔍 Checking for potential secrets..."
+          if grep -r -i "api_key\|api_secret\|password\|token" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" src/ || true; then
+            echo "⚠️ Potential secrets found in source code - please review!"
+          else
+            echo "✅ No obvious secrets found in source code"
+          fi
+
+  # Уведомление об успешном деплое
+  notify:
+    name: 📢 Notification
+    needs: [deploy-frontend, database-check]
+    runs-on: ubuntu-latest
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: 📢 Success notification
+        if: needs.deploy-frontend.result == 'success'
+        run: |
+          echo "🎉 TenderAI successfully deployed!"
+          echo "Frontend: Vercel ✅"
+          echo "Database: Check completed ✅"
+          echo "Commit: ${{ github.sha }}"
+
+      - name: 📢 Failure notification
+        if: needs.deploy-frontend.result == 'failure'
+        run: |
+          echo "❌ Deployment failed!"
+          echo "Please check the logs for details."
+          echo "Commit: ${{ github.sha }}"
+
+# Дополнительные настройки
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true

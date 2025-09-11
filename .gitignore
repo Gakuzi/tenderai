@@ -43,3 +43,15 @@ dist
 
 # Prisma
 prisma/migrations/*.sql
+
+# WhatsApp Web Sessions
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Telegram Sessions
+*.session
+telegram_sessions/
+
+# Other temp files
+*.tmp
+*.temp

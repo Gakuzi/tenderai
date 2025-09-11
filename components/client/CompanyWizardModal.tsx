@@ -6,6 +6,7 @@ import { api } from '../../services/api';
 import Card from '../Card';
 import Spinner from '../Spinner';
 import { X, Plus, Trash2, ShieldOff, AlertTriangle, CheckCircle, Link2, Key, MessageSquare, QrCode, Search } from 'lucide-react';
+import WhatsAppIntegration from '../WhatsAppIntegration';
 import { RUSSIAN_TENDER_PLATFORMS } from '../../constants';
 
 interface CompanyWizardModalProps {
@@ -224,23 +225,61 @@ const CompanyWizardModal: React.FC<CompanyWizardModalProps> = ({ company, onClos
                 onChange={handleEmailChange}
                 className="w-full p-2 border rounded-md dark:bg-gray-700 dark:border-gray-600"/>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* FIX: Use CommunicationChannelType enum members instead of string literals to resolve type errors. */}
-            { ([CommunicationChannelType.TELEGRAM, CommunicationChannelType.WHATSAPP] as const).map(type => {
-                const channel = companyData.communicationChannels.find(c => c.type === type);
-                const isConnected = !!channel;
-                return (
-                    <button key={type} onClick={() => handleConnectMessenger(type)} className={`p-4 rounded-md text-left border-2 ${isConnected ? 'border-green-500 bg-green-900/30' : 'border-gray-600 bg-gray-900/50 hover:border-indigo-500'}`}>
-                        <div className="flex items-center justify-between">
-                            <h4 className="font-bold">{type}</h4>
-                            <span className={`text-xs font-semibold ${isConnected ? 'text-green-400' : 'text-gray-400'}`}>
-                                {isConnected ? t('connected') : t('not_connected')}
-                            </span>
-                        </div>
-                        <p className="text-xs mt-1">{isConnected ? t('disconnect') : t(`connect_${type.toLowerCase()}`)}</p>
-                    </button>
-                )
-            })}
+        {/* WhatsApp Integration */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium mb-3">WhatsApp интеграция</label>
+          <WhatsAppIntegration 
+            companyId={companyData.id ? (companyData as Company).id : 'new-company'}
+            onConnectionChange={(isConnected) => {
+              if (isConnected) {
+                // Добавляем WhatsApp канал в данные компании
+                const existingChannel = companyData.communicationChannels.find(c => c.type === CommunicationChannelType.WHATSAPP);
+                if (!existingChannel) {
+                  setCompanyData(prev => ({
+                    ...prev,
+                    communicationChannels: [
+                      ...prev.communicationChannels,
+                      {
+                        id: `whatsapp_${Date.now()}`,
+                        type: CommunicationChannelType.WHATSAPP,
+                        identifier: 'WhatsApp подключен',
+                        status: 'Connected'
+                      }
+                    ]
+                  }));
+                }
+              } else {
+                // Удаляем WhatsApp канал из данных компании
+                setCompanyData(prev => ({
+                  ...prev,
+                  communicationChannels: prev.communicationChannels.filter(c => c.type !== CommunicationChannelType.WHATSAPP)
+                }));
+              }
+            }}
+          />
+        </div>
+        
+        {/* Telegram Integration (simplified) */}
+        <div>
+          <label className="block text-sm font-medium mb-3">Telegram интеграция</label>
+          {(() => {
+            const channel = companyData.communicationChannels.find(c => c.type === CommunicationChannelType.TELEGRAM);
+            const isConnected = !!channel;
+            return (
+              <button 
+                onClick={() => handleConnectMessenger(CommunicationChannelType.TELEGRAM)} 
+                className={`w-full p-4 rounded-md text-left border-2 ${isConnected ? 'border-green-500 bg-green-900/30' : 'border-gray-600 bg-gray-900/50 hover:border-indigo-500'}`}
+              >
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold">Telegram</h4>
+                  <span className={`text-xs font-semibold ${isConnected ? 'text-green-400' : 'text-gray-400'}`}>
+                    {isConnected ? t('connected') : t('not_connected')}
+                  </span>
+                </div>
+                <p className="text-xs mt-1">{isConnected ? t('disconnect') : 'Подключить Telegram (через QR код)'}</p>
+              </button>
+            );
+          })()} 
         </div>
       </div>
     </div>

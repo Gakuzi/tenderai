@@ -241,14 +241,14 @@ import { WhatsAppMessageSender, TelegramMessageSender, MessageResult } from './m
 
 // Добавляем методы в класс IntegrationManager
 export interface IntegrationManagerExtensions {
-  sendMessage(integrationId: string, integrationType: IntegrationType, recipient: string, message: string): Promise<MessageResult>
+  sendMessage(integrationType: IntegrationType, integrationId: string, recipient: string, message: string): Promise<MessageResult>
   waitForAuthentication(request: {integrationId: string, integrationType: IntegrationType}): Promise<boolean>
   checkStatus(request: {integrationId: string, integrationType: IntegrationType}): Promise<any>
 }
 
 // Расширяем существующий класс
 Object.assign(IntegrationManager.prototype, {
-  async sendMessage(integrationId: string, integrationType: IntegrationType, recipient: string, message: string): Promise<MessageResult> {
+  async sendMessage(integrationType: IntegrationType, integrationId: string, recipient: string, message: string): Promise<MessageResult> {
     try {
       if (integrationType === IntegrationType.WHATSAPP) {
         // Используем наш рабочий WhatsAppWebManager

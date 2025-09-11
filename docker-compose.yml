@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  # Основное приложение TenderAI с сессионным менеджером
+  tenderai:
+    build: .
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    environment:
+      # База данных
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:password@postgres:5432/tenderai}
+      
+      # Сессионные настройки
+      - SESSION_STORAGE_TYPE=supabase
+      - SESSION_ENCRYPTION_KEY=${SESSION_ENCRYPTION_KEY:-your-32-char-secret-key-here}
+      - SESSION_TTL=7776000
+      
+      # Облачное хранилище (Supabase)
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - SUPABASE_STORAGE_BUCKET=whatsapp-sessions
+      
+      # Health мониторинг
+      - HEALTH_CHECK_INTERVAL=300000
+      - MAX_RECONNECT_ATTEMPTS=3
+      - RECONNECT_BACKOFF_MS=5000
+      
+      # Puppeteer настройки
+      - PUPPETEER_HEADLESS=true
+      - PUPPETEER_NO_SANDBOX=true
+      - PUPPETEER_USER_DATA_DIR=/app/sessions
+      
+      # Gemini API
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      
+      # Режим разработки/продакшн
+      - NODE_ENV=production
+    
+    volumes:
+      # Постоянное хранилище для локальных сессий
+      - sessions_data:/app/sessions
+      - logs_data:/app/logs
+    
+    depends_on:
+      postgres:
+        condition: service_healthy
+    
+    restart: unless-stopped
+    
+    # Настройки для корректной работы Puppeteer в контейнере
+    security_opt:
+      - seccomp:unconfined
+    
+    # Лимиты ресурсов для каждого контейнера
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=tenderai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis для кэширования (опционально)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # Nginx для load balancing (для масштабирования)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - tenderai
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  sessions_data:
+    driver: local
+  logs_data:
+    driver: local
+
+# Сети для изоляции сервисов
+networks:
+  default:
+    name: tenderai-network
+    driver: bridge
