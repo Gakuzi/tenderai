@@ -103,10 +103,15 @@ app.get('/', (req, res) => {
                     .then(r => r.json())
                     .then(data => {
                         if (data.success) {
-                            log('QR-код сгенерирован. Отсканируйте в WhatsApp.');
+                            log('✅ QR-код сгенерирован! Отсканируйте в WhatsApp.');
+                            log('Откройте WhatsApp -> Меню (3 точки) -> Привязанные устройства');
+                            log('После сканирования подождите ~30 секунд до завершения.');
                         } else {
-                            log('Ошибка генерации QR-кода: ' + data.error);
+                            log('❌ Ошибка генерации QR-кода: ' + (data.message || data.error || 'Неизвестная ошибка'));
                         }
+                    })
+                    .catch(err => {
+                        log('❌ Сетевая ошибка авторизации: ' + err.message);
                     });
             }
 
@@ -125,8 +130,14 @@ app.get('/', (req, res) => {
                     if (data.success) {
                         log('✅ Сообщение отправлено успешно!');
                     } else {
-                        log('❌ Ошибка отправки: ' + data.error);
+                        log('❌ Ошибка отправки: ' + (data.message || data.error || 'Неизвестная ошибка'));
+                        if (data.output) {
+                            log('Подробности: ' + data.output.slice(-200));
+                        }
                     }
+                })
+                .catch(err => {
+                    log('❌ Сетевая ошибка: ' + err.message);
                 });
             }
 
