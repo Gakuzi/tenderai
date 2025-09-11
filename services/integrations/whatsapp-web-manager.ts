@@ -50,12 +50,12 @@ export class WhatsAppWebManager extends WebSessionManager {
       })
 
       // Ждем появления QR-кода
-      await this.page.waitForSelector('canvas[aria-label="Scan me!"]', { 
+      await this.page.waitForSelector('canvas[aria-label="Scan this QR code to link a device!"]', { 
         timeout: 30000 
       })
 
       // Получаем QR-код
-      const qrCodeElement = await this.page.$('canvas[aria-label="Scan me!"]')
+      const qrCodeElement = await this.page.$('canvas[aria-label="Scan this QR code to link a device!"]')
       if (!qrCodeElement) {
         throw new Error('QR code not found')
       }
@@ -120,15 +120,43 @@ export class WhatsAppWebManager extends WebSessionManager {
       })
 
       // Ждем исчезновения QR-кода (признак успешной авторизации)
-      await this.page.waitForSelector('canvas[aria-label="Scan me!"]', { 
+      await this.page.waitForSelector('canvas[aria-label="Scan this QR code to link a device!"]', { 
         hidden: true, 
         timeout: 300000 // 5 минут
       })
 
-      // Ждем загрузки основного интерфейса
-      await this.page.waitForSelector('[data-testid="chat-list"]', { 
-        timeout: 60000 
-      })
+      // Дожидаемся полной загрузки главного интерфейса
+      console.log('Waiting for WhatsApp main interface to load...')
+      
+      // Проверяем несколько возможных селекторов
+      const possibleSelectors = [
+        '.app-wrapper-web',
+        '[role="main"]', 
+        '[data-testid="chat-list"]',
+        '[data-testid="side"]',
+        '._2QgSC', // Один из возможных CSS классов
+      ]
+      
+      let interfaceLoaded = false
+      for (const selector of possibleSelectors) {
+        try {
+          await this.page.waitForSelector(selector, { timeout: 20000 })
+          console.log(`Found interface element: ${selector}`)
+          interfaceLoaded = true
+          break
+        } catch (e) {
+          console.log(`Selector ${selector} not found, trying next...`)
+        }
+      }
+      
+      if (!interfaceLoaded) {
+        console.log('No specific selector found, waiting for page stability...')
+        // Просто ждем немного больше
+        await new Promise(resolve => setTimeout(resolve, 10000))
+      }
+      
+      // Дополнительно ждем 3 секунды для полной загрузки
+      await new Promise(resolve => setTimeout(resolve, 3000))
 
       // Получаем информацию о пользователе
       let displayName = 'WhatsApp User'
@@ -214,9 +242,298 @@ export class WhatsAppWebManager extends WebSessionManager {
   }
 
   async sendMessage(integrationId: string, recipient: string, message: string): Promise<boolean> {
-    // Эта функция будет реализована позже для отправки сообщений через сохраненную сессию
     console.log(`Sending WhatsApp message to ${recipient}: ${message}`)
-    return true
+    
+    try {
+      // Загружаем сохраненную сессию
+      const sessionData = await this.loadSession(integrationId)
+      if (!sessionData) {
+        throw new Error('No saved session found. Please authenticate first.')
+      }
+
+      // Запускаем новый браузер для отправки сообщения
+      this.browser = await puppeteer.launch({
+        headless: false, // Для отладки
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage'
+        ]
+      })
+
+      this.page = await this.browser.newPage()
+      
+      console.log('Восстанавливаем сохраненную сессию WhatsApp...')
+      
+      // 1. Устанавливаем user agent и viewport
+      await this.page.setUserAgent(sessionData.userAgent)
+      await this.page.setViewport(sessionData.viewport)
+      
+      // 2. Устанавливаем cookies ДО перехода на страницу
+      if (sessionData.cookies && sessionData.cookies.length > 0) {
+        console.log(`Восстанавливаем ${sessionData.cookies.length} cookies`)
+        await this.page.setCookie(...sessionData.cookies)
+      }
+      
+      // 3. Настраиваем localStorage и sessionStorage для всех новых документов
+      await this.page.evaluateOnNewDocument((data) => {
+        console.log('Восстанавливаем localStorage и sessionStorage...')
+        if (data.localStorage) {
+          Object.keys(data.localStorage).forEach(key => {
+            try {
+              localStorage.setItem(key, data.localStorage[key])
+            } catch (e) {
+              console.log('Ошибка установки localStorage:', key, e)
+            }
+          })
+        }
+        if (data.sessionStorage) {
+          Object.keys(data.sessionStorage).forEach(key => {
+            try {
+              sessionStorage.setItem(key, data.sessionStorage[key])
+            } catch (e) {
+              console.log('Ошибка установки sessionStorage:', key, e)
+            }
+          })
+        }
+      }, sessionData)
+      
+      // 4. Переходим на WhatsApp Web с восстановленной сессией
+      console.log('Переходим на WhatsApp Web с восстановленной сессией...')
+      await this.page.goto('https://web.whatsapp.com', { 
+        waitUntil: 'domcontentloaded',
+        timeout: 60000
+      })
+      
+      // Ждем 3 секунды для полной загрузки
+      await new Promise(resolve => setTimeout(resolve, 3000))
+      
+      // Дополнительно восстанавливаем localStorage после загрузки
+      try {
+        await this.page.evaluate((data) => {
+          if (data.localStorage) {
+            Object.keys(data.localStorage).forEach(key => {
+              try {
+                localStorage.setItem(key, data.localStorage[key])
+              } catch (e) {}
+            })
+          }
+          if (data.sessionStorage) {
+            Object.keys(data.sessionStorage).forEach(key => {
+              try {
+                sessionStorage.setItem(key, data.sessionStorage[key])
+              } catch (e) {}
+            })
+          }
+        }, sessionData)
+        console.log('Дополнительно восстановили localStorage')
+      } catch (e) {
+        console.log('Ошибка дополнительного восстановления:', e)
+      }
+      
+      // Проверяем, на какой странице мы оказались
+      const currentUrl = this.page.url()
+      console.log(`Текущий URL: ${currentUrl}`)
+      
+      // Если показывается QR-код, значит сессия не восстановилась
+      const qrExists = await this.page.$('canvas[aria-label*="QR"], canvas[aria-label*="Scan"]')
+      if (qrExists) {
+        throw new Error('Сессия истекла - нужна повторная авторизация')
+      }
+      
+      // Ждем загрузки интерфейса WhatsApp
+      await this.page.waitForSelector('._2QgSC, [data-testid="chat-list"], .app-wrapper-web', { 
+        timeout: 30000 
+      })
+      
+      console.log('WhatsApp interface loaded successfully, searching for contact...')
+      
+      // Ищем контакт или создаем новый чат
+      await this.searchAndOpenChat(recipient)
+      
+      // Отправляем сообщение
+      await this.sendMessageInChat(message)
+      
+      // Логируем успешную отправку
+      await prisma.whatsAppIntegration.update({
+        where: { id: integrationId },
+        data: {
+          messagesSent: { increment: 1 },
+          lastCheckedAt: new Date()
+        }
+      })
+      
+      console.log('✅ WhatsApp message sent successfully!')
+      return true
+      
+    } catch (error) {
+      console.error('❌ Failed to send WhatsApp message:', error)
+      
+      // Логируем ошибку
+      await prisma.integrationLog.create({
+        data: {
+          companyId: this.companyId,
+          integrationType: IntegrationType.WHATSAPP,
+          integrationId,
+          action: 'send_message_failed',
+          status: 'ERROR',
+          message: `Failed to send message to ${recipient}: ${error}`,
+          errorDetails: { error: error instanceof Error ? error.message : String(error) }
+        }
+      })
+      
+      return false
+    } finally {
+      // Закрываем браузер
+      if (this.browser) {
+        await this.browser.close()
+        this.browser = null
+        this.page = null
+      }
+    }
+  }
+  
+  private async searchAndOpenChat(recipient: string): Promise<void> {
+    // Нажимаем на кнопку поиска или создания нового чата
+    const newChatSelectors = [
+      '[data-testid="new-chat-btn"]',
+      '._3WByx', // Кнопка новый чат
+      '.enAC0', // Другой вариант
+      '[title="Новый чат"]'
+    ]
+    
+    let chatButtonFound = false
+    for (const selector of newChatSelectors) {
+      try {
+        const button = await this.page.$(selector)
+        if (button) {
+          await button.click()
+          chatButtonFound = true
+          console.log(`Clicked new chat button using selector: ${selector}`)
+          break
+        }
+      } catch (e) {
+        continue
+      }
+    }
+    
+    if (!chatButtonFound) {
+      // Пробуем найти поле поиска напрямую
+      console.log('New chat button not found, trying search field directly...')
+    }
+    
+    // Ждем появления поля поиска
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    
+    // Ищем поле ввода для поиска контакта
+    const searchSelectors = [
+      '[data-testid="chat-list-search"]',
+      '._2aBzC', // Поле поиска
+      'input[placeholder*="поиск"], input[placeholder*="Search"]',
+      '._3FRCZ input',
+      '.copyable-text[data-tab="3"]' // Поле ввода номера
+    ]
+    
+    let searchField = null
+    for (const selector of searchSelectors) {
+      searchField = await this.page.$(selector)
+      if (searchField) {
+        console.log(`Found search field using selector: ${selector}`)
+        break
+      }
+    }
+    
+    if (!searchField) {
+      throw new Error('Could not find search field')
+    }
+    
+    // Очищаем поле и вводим номер
+    await searchField.click()
+    await searchField.focus()
+    await this.page.keyboard.down('Control')
+    await this.page.keyboard.press('a')
+    await this.page.keyboard.up('Control')
+    await searchField.type(recipient)
+    
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    
+    // Ищем результат поиска и кликаем на него
+    const contactSelectors = [
+      `[title*="${recipient}"]`,
+      '._8nE1Y', // Результат поиска
+      '._210SC', // Контакт в списке
+      '.zoWT4' // Другой вариант
+    ]
+    
+    let contactFound = false
+    for (const selector of contactSelectors) {
+      try {
+        const contact = await this.page.$(selector)
+        if (contact) {
+          await contact.click()
+          contactFound = true
+          console.log(`Opened chat using selector: ${selector}`)
+          break
+        }
+      } catch (e) {
+        continue
+      }
+    }
+    
+    if (!contactFound) {
+      // Если контакт не найден, пробуем нажать Enter для создания нового чата
+      await this.page.keyboard.press('Enter')
+      await new Promise(resolve => setTimeout(resolve, 2000))
+    }
+    
+    // Ждем загрузки чата
+    await new Promise(resolve => setTimeout(resolve, 3000))
+  }
+  
+  private async sendMessageInChat(message: string): Promise<void> {
+    // Ищем поле ввода сообщения
+    const messageInputSelectors = [
+      '[data-testid="compose-input"]',
+      '._13NKt', // Поле ввода
+      '.copyable-text[data-tab="1"]',
+      '._3Whw5',
+      'div[contenteditable="true"][data-tab="1"]'
+    ]
+    
+    let messageInput = null
+    for (const selector of messageInputSelectors) {
+      messageInput = await this.page.$(selector)
+      if (messageInput) {
+        console.log(`Found message input using selector: ${selector}`)
+        break
+      }
+    }
+    
+    if (!messageInput) {
+      throw new Error('Could not find message input field')
+    }
+    
+    // Вводим сообщение
+    await messageInput.click()
+    await messageInput.focus()
+    
+    // Очищаем поле
+    await this.page.keyboard.down('Control')
+    await this.page.keyboard.press('a')
+    await this.page.keyboard.up('Control')
+    
+    await messageInput.type(message)
+    
+    // Ждем немного
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    
+    // Отправляем сообщение
+    await this.page.keyboard.press('Enter')
+    
+    // Ждем отправки
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    
+    console.log('Message sent!')
   }
 
   async isConnected(integrationId: string): Promise<boolean> {

@@ -27,6 +27,7 @@ export interface IntegrationSummary {
 }
 
 export class IntegrationManager {
+  private activeManagers = new Map<string, WhatsAppWebManager | TelegramWebManager>()
   
   // Создание новой интеграции и генерация QR-кода
   async initializeQRAuth(request: QRAuthRequest): Promise<QRAuthResponse> {
@@ -67,9 +68,11 @@ export class IntegrationManager {
 
     if (integrationType === IntegrationType.WHATSAPP) {
       manager = new WhatsAppWebManager(companyId)
+      this.activeManagers.set(currentIntegrationId, manager)
       qrCode = await manager.generateQRCode(currentIntegrationId)
     } else if (integrationType === IntegrationType.TELEGRAM) {
       manager = new TelegramWebManager(companyId)
+      this.activeManagers.set(currentIntegrationId, manager)
       qrCode = await manager.generateQRCode(currentIntegrationId)
     } else {
       throw new Error(`Unsupported integration type: ${integrationType}`)
@@ -85,19 +88,11 @@ export class IntegrationManager {
 
   // Ожидание завершения авторизации
   async waitForQRAuth(integrationId: string, integrationType: IntegrationType): Promise<boolean> {
-    const companyIntegration = await this.getCompanyIdFromIntegration(integrationId, integrationType)
-    if (!companyIntegration) {
-      throw new Error('Integration not found')
-    }
-
-    let manager: WhatsAppWebManager | TelegramWebManager
-
-    if (integrationType === IntegrationType.WHATSAPP) {
-      manager = new WhatsAppWebManager(companyIntegration.companyId)
-    } else if (integrationType === IntegrationType.TELEGRAM) {
-      manager = new TelegramWebManager(companyIntegration.companyId)
-    } else {
-      throw new Error(`Unsupported integration type: ${integrationType}`)
+    // Ищем активный менеджер
+    let manager = this.activeManagers.get(integrationId)
+    
+    if (!manager) {
+      throw new Error('No active session found for this integration. Please initialize QR auth first.')
     }
 
     try {
@@ -247,6 +242,8 @@ import { WhatsAppMessageSender, TelegramMessageSender, MessageResult } from './m
 // Добавляем методы в класс IntegrationManager
 export interface IntegrationManagerExtensions {
   sendMessage(integrationId: string, integrationType: IntegrationType, recipient: string, message: string): Promise<MessageResult>
+  waitForAuthentication(request: {integrationId: string, integrationType: IntegrationType}): Promise<boolean>
+  checkStatus(request: {integrationId: string, integrationType: IntegrationType}): Promise<any>
 }
 
 // Расширяем существующий класс
@@ -254,8 +251,25 @@ Object.assign(IntegrationManager.prototype, {
   async sendMessage(integrationId: string, integrationType: IntegrationType, recipient: string, message: string): Promise<MessageResult> {
     try {
       if (integrationType === IntegrationType.WHATSAPP) {
-        const sender = new WhatsAppMessageSender()
-        return await sender.sendMessage(integrationId, recipient, message)
+        // Используем наш рабочий WhatsAppWebManager
+        const integration = await prisma.whatsAppIntegration.findUnique({
+          where: { id: integrationId }
+        })
+        
+        if (!integration) {
+          throw new Error('WhatsApp integration not found')
+        }
+        
+        const manager = new WhatsAppWebManager(integration.companyId)
+        const success = await manager.sendMessage(integrationId, recipient, message)
+        
+        return {
+          success,
+          messageId: success ? `wa_${Date.now()}` : undefined,
+          error: success ? undefined : 'Failed to send message',
+          timestamp: new Date()
+        }
+        
       } else if (integrationType === IntegrationType.TELEGRAM) {
         const sender = new TelegramMessageSender()
         return await sender.sendMessage(integrationId, recipient, message)
@@ -269,6 +283,14 @@ Object.assign(IntegrationManager.prototype, {
         timestamp: new Date()
       }
     }
+  },
+
+  async waitForAuthentication(request: {integrationId: string, integrationType: IntegrationType}): Promise<boolean> {
+    return await this.waitForQRAuth(request.integrationId, request.integrationType)
+  },
+
+  async checkStatus(request: {integrationId: string, integrationType: IntegrationType}): Promise<any> {
+    return await this.getIntegrationStatus(request.integrationId, request.integrationType)
   }
 } as IntegrationManagerExtensions)
 

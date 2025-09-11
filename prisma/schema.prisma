@@ -456,23 +456,26 @@ model TelegramIntegration {
 }
 
 // WhatsApp Business интеграции  
+// WhatsApp веб-сессии (WhatsApp Web)
 model WhatsAppIntegration {
   id                String   @id @default(cuid())
   companyId         String
   company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   
-  // WhatsApp Business API настройки
-  phoneNumberId     String   // WhatsApp Business Phone Number ID
-  businessAccountId String   // WhatsApp Business Account ID
-  accessToken       String   // зашифрован
+  // Веб-сессия данные (зашифрованы)
+  encryptedWebSession String?   // Зашифрованные cookies, localStorage, etc.
+  sessionId           String?   // ID сессии из WhatsApp Web
+  phoneNumber         String?   // Номер телефона из сессии
+  displayName         String?   // Отображаемое имя
   
-  // Webhook настройки
-  webhookUrl        String?
-  verifyToken       String?  // зашифрован
+  // QR-код для подключения (временные данные)
+  qrCodeData          String?   // base64 QR-код
+  qrCodeExpiresAt     DateTime?
+  connectionStatus    String?   // waiting_qr, scanning, connecting, connected
   
-  // Номер телефона
-  phoneNumber       String   // +7XXXXXXXXXX
-  displayName       String?
+  // Веб-настройки
+  webSessionUrl       String?   // URL веб-версии
+  userAgent           String?   // User agent для браузера
   
   // Статус
   status            IntegrationStatus @default(DISCONNECTED)

@@ -50,10 +50,13 @@ export class WhatsAppMessageSender {
         timeout: 60000
       })
 
-      // Ждем загрузки интерфейса
-      await this.page.waitForSelector('[data-testid="chat-list"]', { 
+      // Ждем загрузки интерфейса (используем рабочий селектор)
+      await this.page.waitForSelector('.app-wrapper-web', { 
         timeout: 30000 
       })
+      
+      // Дополнительно ждем полной загрузки
+      await new Promise(resolve => setTimeout(resolve, 5000))
 
       // Ищем контакт или создаем новый чат
       await this.findOrCreateChat(recipient)

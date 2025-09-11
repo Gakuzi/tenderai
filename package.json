@@ -10,7 +10,12 @@
     "db:seed": "npx tsx prisma/seed.ts",
     "db:migrate": "npx prisma migrate dev",
     "db:generate": "npx prisma generate",
-    "db:studio": "npx prisma studio"
+    "db:studio": "npx prisma studio",
+    "simple-test": "npx tsx simple-test.ts",
+    "test-wa": "npx tsx test-whatsapp-only.ts",
+    "check-wa-selectors": "npx tsx check-whatsapp-selectors.ts",
+    "check-wa-auth": "npx tsx check-whatsapp-authenticated.ts",
+    "test-wa-message": "npx tsx test-whatsapp-message.ts"
   },
   "dependencies": {
     "@google/genai": "^1.19.0",
@@ -18,6 +23,7 @@
     "axios": "^1.12.0",
     "bcryptjs": "^2.4.3",
     "crypto-js": "^4.2.0",
+    "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.543.0",
     "nodemailer": "^7.0.6",
