@@ -161,18 +161,25 @@ app.get('/', (req, res) => {
 // API endpoints
 app.get('/api/check/whatsapp', (req, res) => {
   const child = spawn('npx', ['tsx', '-e', `
+    process.env.NODE_ENV = 'production';
     import { prisma } from './lib/prisma';
     (async () => {
-      const integration = await prisma.whatsAppIntegration.findFirst({
-        where: { status: 'CONNECTED' },
-        orderBy: { lastCheckedAt: 'desc' }
-      });
-      console.log(JSON.stringify(integration ? {
-        status: integration.status,
-        displayName: integration.displayName,
-        id: integration.id
-      } : { status: 'DISCONNECTED' }));
-    })().catch(console.error);
+      try {
+        const integration = await prisma.whatsAppIntegration.findFirst({
+          where: { status: 'CONNECTED' },
+          orderBy: { lastCheckedAt: 'desc' }
+        });
+        const result = integration ? {
+          status: integration.status,
+          displayName: integration.displayName,
+          id: integration.id,
+          lastChecked: integration.lastCheckedAt
+        } : { status: 'DISCONNECTED' };
+        console.log('RESULT:' + JSON.stringify(result));
+      } catch (error) {
+        console.log('RESULT:' + JSON.stringify({ status: 'ERROR', error: error.message }));
+      }
+    })();
   `]);
 
   let output = '';
@@ -182,10 +189,19 @@ app.get('/api/check/whatsapp', (req, res) => {
 
   child.on('close', (code) => {
     try {
-      const data = JSON.parse(output.trim());
-      res.json(data);
+      // Извлекаем только строку с результатом
+      const lines = output.split('\n');
+      const resultLine = lines.find(line => line.startsWith('RESULT:'));
+      
+      if (resultLine) {
+        const jsonStr = resultLine.replace('RESULT:', '');
+        const data = JSON.parse(jsonStr);
+        res.json(data);
+      } else {
+        res.json({ status: 'ERROR', error: 'No result found', output });
+      }
     } catch (e) {
-      res.json({ status: 'ERROR', error: e.message });
+      res.json({ status: 'ERROR', error: e.message, output });
     }
   });
 });
