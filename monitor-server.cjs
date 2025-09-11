@@ -206,6 +206,29 @@ app.get('/api/check/whatsapp', (req, res) => {
   });
 });
 
+app.post('/api/auth/whatsapp', (req, res) => {
+  console.log('Starting WhatsApp authentication...');
+  
+  const child = spawn('npx', ['tsx', 'reauth-whatsapp.ts']);
+  
+  let output = '';
+  child.stdout.on('data', (data) => {
+    output += data.toString();
+    console.log(data.toString());
+  });
+
+  child.on('close', (code) => {
+    const success = output.includes('Авторизация прошла успешно');
+    const qrGenerated = output.includes('QR-код сгенерирован');
+    
+    res.json({ 
+      success: success || qrGenerated,
+      message: success ? 'Authentication completed' : qrGenerated ? 'QR code generated - scan it' : 'Authentication failed',
+      output: output.slice(-1000) // последние 1000 символов
+    });
+  });
+});
+
 app.post('/api/send/whatsapp', (req, res) => {
   const { phone, message } = req.body;
   console.log('Sending WhatsApp message to:', phone);
