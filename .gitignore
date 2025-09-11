@@ -22,3 +22,24 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+/generated/prisma
+
+# Database
+*.db
+*.db-journal
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Dependencies
+node_modules
+
+# Build
+dist
+.vercel
+
+# Prisma
+prisma/migrations/*.sql

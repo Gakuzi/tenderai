@@ -1,0 +1,373 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Users and Authentication
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  role      UserRole
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // If this is a client user, link to client
+  clientId String? @unique
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("users")
+}
+
+model Client {
+  id            String       @id @default(cuid())
+  name          String
+  logoUrl       String?
+  contactPerson String
+  email         String       @unique
+  status        ClientStatus @default(LEAD)
+  balance       Decimal      @default(0)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  // Relations
+  user         User?                    @relation
+  companies    Company[]
+  templates    ClientTemplate[]
+  transactions FinancialTransaction[]
+  requests     ClientRequest[]
+  workModel    WorkModel?
+
+  // Integrations
+  integrations ClientIntegrations?
+
+  @@map("clients")
+}
+
+model Company {
+  id        String    @id @default(cuid())
+  name      String
+  inn       String
+  kpp       String
+  isActive  Boolean   @default(true)
+  clientId  String
+  client    Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Relations
+  platformCredentials    PlatformCredential[]
+  communicationChannels  CommunicationChannel[]
+  requests               ClientRequest[]
+
+  @@map("companies")
+}
+
+model PlatformCredential {
+  id           String  @id @default(cuid())
+  platformName String
+  url          String
+  status       ConnectStatus @default(DISCONNECTED)
+  sessionData  Json?   // Encrypted session data
+  companyId    String
+  company      Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("platform_credentials")
+}
+
+model CommunicationChannel {
+  id         String                    @id @default(cuid())
+  type       CommunicationChannelType
+  identifier String                    // Email address, phone number, etc.
+  status     ConnectStatus            @default(DISCONNECTED)
+  companyId  String
+  company    Company                  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt  DateTime                 @default(now())
+  updatedAt  DateTime                 @updatedAt
+
+  @@map("communication_channels")
+}
+
+model ClientIntegrations {
+  id               String  @id @default(cuid())
+  telegramBotToken String?
+  clientId         String  @unique
+  client           Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("client_integrations")
+}
+
+model WorkModel {
+  id                      String         @id @default(cuid())
+  type                    WorkModelType
+  
+  // Package model fields
+  packageName             String?
+  tenderCount            Int?
+  price                  Decimal?
+  tendersRemaining       Int?
+  
+  // Result-oriented model fields
+  baseCalculationFee     Decimal?
+  successBonusPercentage Int?
+  
+  clientId               String         @unique
+  client                 Client         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  @@map("work_models")
+}
+
+model ClientTemplate {
+  id       String @id @default(cuid())
+  name     String
+  type     String
+  fileUrl  String
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("client_templates")
+}
+
+model FinancialTransaction {
+  id          String                    @id @default(cuid())
+  date        DateTime                  @default(now())
+  description String
+  amount      Decimal
+  type        FinancialTransactionType
+  clientId    String
+  client      Client                    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  @@map("financial_transactions")
+}
+
+// Tenders and Requests
+model Tender {
+  id          String       @id @default(cuid())
+  title       String
+  clientName  String
+  nmck        Decimal
+  deadline    DateTime
+  status      TenderStatus @default(OPEN)
+  etpUrl      String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  // Relations
+  items TenderItem[]
+  bids  Bid[]
+
+  @@map("tenders")
+}
+
+model TenderItem {
+  id          String @id @default(cuid())
+  description String
+  quantity    Int
+  unit        String
+  tenderId    String
+  tender      Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  @@map("tender_items")
+}
+
+model ClientRequest {
+  id                String        @id @default(cuid())
+  tenderDescription String
+  receivedAt        DateTime      @default(now())
+  status            RequestStatus @default(DRAFT)
+  clientId          String
+  client            Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  companyId         String?
+  company           Company?      @relation(fields: [companyId], references: [id])
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  // Relations
+  documents RequestDocument[]
+
+  @@map("client_requests")
+}
+
+model RequestDocument {
+  id        String        @id @default(cuid())
+  name      String
+  url       String
+  requestId String
+  request   ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@map("request_documents")
+}
+
+// Suppliers and Agents
+model Supplier {
+  id            String         @id @default(cuid())
+  name          String
+  inn           String         @unique
+  rating        Decimal        @default(0)
+  status        SupplierStatus @default(VETTING)
+  contactPerson String
+  phone         String
+  email         String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@map("suppliers")
+}
+
+model Agent {
+  id           String      @id @default(cuid())
+  name         String
+  description  String
+  provider     AgentModel
+  status       AgentStatus @default(IDLE)
+  systemPrompt String
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  // Relations
+  proxy AgentProxy?
+
+  @@map("agents")
+}
+
+model AgentProxy {
+  id      String  @id @default(cuid())
+  enabled Boolean @default(false)
+  host    String?
+  port    Int?
+  agentId String  @unique
+  agent   Agent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@map("agent_proxies")
+}
+
+model Bid {
+  id       String @id @default(cuid())
+  tenderId String
+  tender   Tender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+  // Add more bid fields as needed
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("bids")
+}
+
+// System models
+model Approval {
+  id          String         @id @default(cuid())
+  action      String
+  requestedBy String
+  requestedAt DateTime       @default(now())
+  status      ApprovalStatus @default(PENDING)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@map("approvals")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
+  user      String
+  action    String
+  details   String
+  createdAt DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+// Enums
+enum UserRole {
+  ADMIN
+  MANAGER
+  ANALYST
+  DEVELOPER
+  CLIENT
+}
+
+enum ClientStatus {
+  ACTIVE
+  INACTIVE
+  LEAD
+}
+
+enum SupplierStatus {
+  ACTIVE
+  INACTIVE
+  VETTING
+}
+
+enum AgentStatus {
+  IDLE
+  PROCESSING
+  ACTIVE
+}
+
+enum TenderStatus {
+  OPEN
+  PROCESSING
+  CLOSED
+  AWARDED
+  CANCELLED
+}
+
+enum RequestStatus {
+  DRAFT
+  SUBMITTED
+  IN_PROGRESS
+  REJECTED
+  COMPLETED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum WorkModelType {
+  PACKAGE
+  RESULT_ORIENTED
+}
+
+enum FinancialTransactionType {
+  CREDIT
+  DEBIT
+  REFUND
+}
+
+enum CommunicationChannelType {
+  EMAIL
+  TELEGRAM
+  WHATSAPP
+}
+
+enum ConnectStatus {
+  CONNECTED
+  DISCONNECTED
+}
+
+enum AgentModel {
+  GEMINI_2_5_FLASH
+  GEMINI_2_5_PRO
+  CHATGPT_4
+  YANDEX_GPT
+  GIGA_CHAT
+}
