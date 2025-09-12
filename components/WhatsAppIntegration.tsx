@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, QrCode, CheckCircle, AlertCircle, Loader } from 'lucide-react';
 import Card from './Card';
 
@@ -35,6 +35,7 @@ const WhatsAppIntegration: React.FC<WhatsAppIntegrationProps> = ({
   const [isInitializing, setIsInitializing] = useState(false);
   const [showQR, setShowQR] = useState(false);
   const [lastChecked, setLastChecked] = useState<Date>(new Date());
+  const lastConnectionStatus = useRef<boolean | null>(null);
   
   // Проверка статуса при загрузке
   useEffect(() => {
@@ -59,9 +60,10 @@ const WhatsAppIntegration: React.FC<WhatsAppIntegrationProps> = ({
     };
   }, [status.status, showQR, status.connected, qrData.success]);
 
-  // Уведомляем родительский компонент об изменении статуса подключения
+  // Уведомляем родительский компонент об изменении статуса подключения (только при реальном изменении)
   useEffect(() => {
-    if (onConnectionChange) {
+    if (onConnectionChange && lastConnectionStatus.current !== status.connected) {
+      lastConnectionStatus.current = status.connected;
       onConnectionChange(status.connected);
     }
   }, [status.connected, onConnectionChange]);
