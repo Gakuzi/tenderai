@@ -5,7 +5,7 @@ import { api } from '../services/api';
 import { ClientRequest } from '../types';
 import Spinner from '../components/Spinner';
 import Card from '../components/Card';
-import MessengerManager from '../components/MessengerManager';
+// import MessengerManager from '../components/MessengerManager'; // Временно отключен
 import { Cpu, File, CheckCircle, MessageCircle } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
@@ -71,15 +71,13 @@ const RequestDetail: React.FC = () => {
             </Card>
         </div>
         <div className="space-y-6">
-          {/* Мессенджеры компании */}
+          {/* Мессенджеры компании - временно отключены */}
           {request.company && (
             <Card>
-              <MessengerManager
-                requestId={request.id}
-                companyId={request.company.id}
-                companyName={request.company.name}
-                onMessagesUpdate={setMessageCount}
-              />
+              <div className="p-4">
+                <h3 className="text-lg font-semibold mb-2">Коммуникации</h3>
+                <p className="text-gray-400 text-sm">Система интеграций временно отключена для исправления</p>
+              </div>
             </Card>
           )}
           
