@@ -35,8 +35,8 @@ export abstract class WebSessionManager {
             status: IntegrationStatus.CONNECTED,
             lastCheckedAt: new Date(),
             lastError: null,
-            // Сохраняем зашифрованную сессию в правильном поле
-            encryptedWebSession: encryptedSession
+            // Сохраняем зашифрованную сессию в поле botToken (переименуем позже)
+            botToken: encryptedSession
           }
         })
       } else if (this.integrationType === 'WHATSAPP') {
@@ -46,8 +46,8 @@ export abstract class WebSessionManager {
             status: IntegrationStatus.CONNECTED,
             lastCheckedAt: new Date(),
             lastError: null,
-            // Сохраняем зашифрованную сессию в правильном поле
-            encryptedWebSession: encryptedSession
+            // Сохраняем зашифрованную сессию в поле accessToken
+            accessToken: encryptedSession
           }
         })
       }
@@ -78,12 +78,12 @@ export abstract class WebSessionManager {
         const integration = await prisma.telegramIntegration.findUnique({
           where: { id: integrationId }
         })
-        encryptedSession = integration?.encryptedWebSession || null
+        encryptedSession = integration?.botToken || null
       } else if (this.integrationType === 'WHATSAPP') {
         const integration = await prisma.whatsAppIntegration.findUnique({
           where: { id: integrationId }
         })
-        encryptedSession = integration?.encryptedWebSession || null
+        encryptedSession = integration?.accessToken || null
       }
 
       if (!encryptedSession) {

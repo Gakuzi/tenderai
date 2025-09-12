@@ -18,9 +18,10 @@ INTERFACE_PID=$!
 # Ждем запуска интерфейса
 sleep 5
 
-# Запускаем простой WhatsApp API сервер (заглушка)
-echo "💬 Запуск WhatsApp API сервера..."
-nohup node -e "
+# Запускаем реальный WhatsApp API сервер
+echo "💬 Запуск реального WhatsApp сервера..."
+nohup npx ts-node dev-whatsapp-server.ts > whatsapp-api.log 2>&1 &
+WHATSAPP_PID=$!
 const express = require('express');
 const cors = require('cors');
 const app = express();
