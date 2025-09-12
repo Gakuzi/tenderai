@@ -222,86 +222,63 @@ export class WhatsAppMessageSender {
 }
 
 export class TelegramMessageSender {
-  private browser: Browser | null = null
-  private page: Page | null = null
-
   async sendMessage(integrationId: string, recipient: string, message: string): Promise<MessageResult> {
     try {
-      // Загружаем сессию из базы данных
+      // Загружаем интеграцию из базы данных
       const integration = await prisma.telegramIntegration.findUnique({
         where: { id: integrationId }
       })
 
-      if (!integration || !integration.encryptedWebSession) {
-        throw new Error('Integration not found or not connected')
+      if (!integration) {
+        throw new Error('Telegram integration not found')
       }
 
-      // Расшифровываем сессию
-      const sessionData: WebSession = JSON.parse(decrypt(integration.encryptedWebSession))
-
-      // Запускаем браузер
-      this.browser = await puppeteer.launch({
-        headless: false,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage'
-        ]
-      })
-
-      this.page = await this.browser.newPage()
-
-      // Восстанавливаем сессию
-      await this.restoreSession(sessionData)
-
-      // Переходим на Telegram Web
-      await this.page.goto('https://web.telegram.org', { 
-        waitUntil: 'networkidle0',
-        timeout: 60000
-      })
-
-      // Ждем загрузки интерфейса
-      await this.page.waitForSelector('.chat-list', { timeout: 30000 })
-
-      // Ищем контакт или создаем новый чат
-      await this.findOrCreateChat(recipient)
-
-      // Отправляем сообщение
-      await this.sendTextMessage(message)
-
-      // Обновляем статистику
-      await prisma.telegramIntegration.update({
-        where: { id: integrationId },
-        data: {
-          messagesSent: { increment: 1 },
-          lastCheckedAt: new Date()
-        }
-      })
-
-      // Логируем успешную отправку
-      await prisma.integrationLog.create({
-        data: {
-          companyId: integration.companyId,
-          integrationType: 'TELEGRAM',
-          integrationId,
-          action: 'send_message',
-          status: 'SUCCESS',
-          message: `Message sent to ${recipient}: ${message.substring(0, 100)}...`
-        }
-      })
-
-      return {
-        success: true,
-        messageId: `tg_${Date.now()}`,
-        timestamp: new Date()
+      if (!integration.encryptedWebSession) {
+        throw new Error('Telegram not connected')
       }
+
+      // Используем TelegramGramJSManager для отправки сообщений
+      const { TelegramGramJSManager } = await import('./telegram-gramjs-manager')
+      const manager = new TelegramGramJSManager(integration.companyId)
+      
+      // Отправляем сообщение через GramJS
+      const result = await manager.sendMessage({
+        chatId: recipient,
+        message: message
+      })
+
+      if (result.success) {
+        // Обновляем статистику
+        await prisma.telegramIntegration.update({
+          where: { id: integrationId },
+          data: {
+            messagesSent: { increment: 1 },
+            lastCheckedAt: new Date()
+          }
+        })
+
+        // Логируем успешную отправку
+        await prisma.integrationLog.create({
+          data: {
+            companyId: integration.companyId,
+            integrationType: 'TELEGRAM',
+            integrationId,
+            action: 'send_message',
+            status: 'SUCCESS',
+            message: `Message sent to ${recipient}: ${message.substring(0, 100)}...`
+          }
+        })
+      }
+
+      return result
 
     } catch (error) {
       console.error('Failed to send Telegram message:', error)
       
       // Логируем ошибку
       const integration = await prisma.telegramIntegration.findUnique({
-        where: { id: integrationId }
+        where: { id: integrationId },
+        select: { companyId: true }
       })
       
       if (integration) {
@@ -323,89 +300,6 @@ export class TelegramMessageSender {
         error: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date()
       }
-    } finally {
-      await this.cleanup()
-    }
-  }
-
-  private async restoreSession(sessionData: WebSession): Promise<void> {
-    if (!this.page) return
-
-    // Восстанавливаем cookies
-    await this.page.setCookie(...sessionData.cookies)
-
-    // Восстанавливаем localStorage
-    await this.page.evaluateOnNewDocument((localStorage) => {
-      for (const [key, value] of Object.entries(localStorage)) {
-        window.localStorage.setItem(key, value)
-      }
-    }, sessionData.localStorage)
-
-    // Восстанавливаем sessionStorage  
-    await this.page.evaluateOnNewDocument((sessionStorage) => {
-      for (const [key, value] of Object.entries(sessionStorage)) {
-        window.sessionStorage.setItem(key, value)
-      }
-    }, sessionData.sessionStorage)
-
-    // Устанавливаем viewport
-    await this.page.setViewport(sessionData.viewport)
-  }
-
-  private async findOrCreateChat(recipient: string): Promise<void> {
-    if (!this.page) return
-
-    try {
-      // Используем поиск в Telegram
-      await this.page.click('.sidebar-header .search-wrapper')
-      await this.page.waitForSelector('input[placeholder*="Search"]', { timeout: 5000 })
-      await this.page.type('input[placeholder*="Search"]', recipient)
-      
-      // Ждем результатов поиска
-      await this.page.waitForTimeout(2000)
-      
-      // Кликаем на первый результат
-      const searchResults = await this.page.$$('.chat-list .chatlist-chat')
-      if (searchResults.length > 0) {
-        await searchResults[0].click()
-      } else {
-        throw new Error(`Contact ${recipient} not found`)
-      }
-
-    } catch (error) {
-      console.error('Failed to find/create Telegram chat:', error)
-      throw error
-    }
-  }
-
-  private async sendTextMessage(message: string): Promise<void> {
-    if (!this.page) return
-
-    try {
-      // Ждем поле ввода сообщения
-      await this.page.waitForSelector('.input-message-input', { timeout: 10000 })
-
-      // Вводим сообщение
-      await this.page.click('.input-message-input')
-      await this.page.type('.input-message-input', message)
-
-      // Нажимаем Enter или кнопку отправки
-      await this.page.keyboard.press('Enter')
-
-      // Ждем отправки сообщения
-      await this.page.waitForTimeout(2000)
-
-    } catch (error) {
-      console.error('Failed to send Telegram message:', error)
-      throw error
-    }
-  }
-
-  private async cleanup(): Promise<void> {
-    if (this.browser) {
-      await this.browser.close()
-      this.browser = null
-      this.page = null
     }
   }
 }

@@ -1,6 +1,6 @@
 import { prisma } from '../../lib/prisma'
 import { WhatsAppWebManager } from './whatsapp-web-manager'
-import { TelegramWebManager } from './telegram-web-manager'
+import { TelegramGramJSManager } from './telegram-gramjs-manager'
 import { IntegrationStatus, IntegrationType } from '@prisma/client'
 
 export interface QRAuthRequest {
@@ -27,7 +27,7 @@ export interface IntegrationSummary {
 }
 
 export class IntegrationManager {
-  private activeManagers = new Map<string, WhatsAppWebManager | TelegramWebManager>()
+  private activeManagers = new Map<string, WhatsAppWebManager | TelegramGramJSManager>()
   
   // Создание новой интеграции и генерация QR-кода
   async initializeQRAuth(request: QRAuthRequest): Promise<QRAuthResponse> {
@@ -63,7 +63,7 @@ export class IntegrationManager {
     }
 
     // Генерируем QR-код
-    let manager: WhatsAppWebManager | TelegramWebManager
+    let manager: WhatsAppWebManager | TelegramGramJSManager
     let qrCode: string
 
     if (integrationType === IntegrationType.WHATSAPP) {
@@ -71,9 +71,17 @@ export class IntegrationManager {
       this.activeManagers.set(currentIntegrationId, manager)
       qrCode = await manager.generateQRCode(currentIntegrationId)
     } else if (integrationType === IntegrationType.TELEGRAM) {
-      manager = new TelegramWebManager(companyId)
+      // Для Telegram используем GramJS подход с кодом из SMS
+      manager = new TelegramGramJSManager(companyId)
       this.activeManagers.set(currentIntegrationId, manager)
-      qrCode = await manager.generateQRCode(currentIntegrationId)
+      // Для Telegram нет QR-кода, используем заглушку
+      qrCode = 'data:image/svg+xml;base64,' + Buffer.from(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+          <rect width="200" height="200" fill="#0088cc"/>
+          <text x="100" y="100" text-anchor="middle" dy=".3em" fill="white" font-size="14">Telegram Auth</text>
+          <text x="100" y="130" text-anchor="middle" dy=".3em" fill="white" font-size="12">Phone + SMS Code</text>
+        </svg>
+      `).toString('base64')
     } else {
       throw new Error(`Unsupported integration type: ${integrationType}`)
     }
