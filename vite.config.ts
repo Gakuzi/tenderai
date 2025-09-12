@@ -12,6 +12,34 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      // Исключаем server-side файлы из обработки Vite
+      optimizeDeps: {
+        exclude: [
+          'prisma',
+          '@prisma/client',
+          'bcryptjs',
+          'jsonwebtoken',
+          'nodemailer',
+          'telegram',
+          'whatsapp-web.js',
+          'playwright',
+          'puppeteer'
+        ]
+      },
+      // Не обрабатываем server-side файлы
+      build: {
+        rollupOptions: {
+          external: [
+            /.*\.cjs$/,
+            /prisma\/.*/,
+            /services\/integrations\/.*/,
+            /api\/.*/,
+            /.*-server\..*/,
+            /test-.*/,
+            /check-.*/
+          ]
+        }
       }
     };
 });
