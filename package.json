@@ -16,7 +16,7 @@
     "check-wa-selectors": "npx tsx check-whatsapp-selectors.ts",
     "check-wa-auth": "npx tsx check-whatsapp-authenticated.ts",
     "test-wa-message": "npx tsx test-whatsapp-message.ts",
-    "whatsapp-server": "node whatsapp-server.cjs",
+    "whatsapp-server": "npx tsx whatsapp-server.ts",
     "test-smart-wa": "node test-smart-whatsapp.js",
     "dev:full": "concurrently \"npm run whatsapp-server\" \"npm run dev\""
   },

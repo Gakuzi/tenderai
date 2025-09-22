@@ -1,7 +1,10 @@
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
-const whatsappRoutes = require('./api/whatsapp.cjs');
+import express from 'express';
+import cors from 'cors';
+import path from 'path';
+import whatsappRoutes from './api/whatsapp.ts';
+import { integrationManager } from './services/integrations/integration-manager.ts';
+import { prisma } from './lib/prisma.ts';
+import { IntegrationType } from '@prisma/client';
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -12,7 +15,44 @@ app.use(express.json());
 app.use(express.static('public'));
 
 // API Routes
-app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/integrations/whatsapp', whatsappRoutes);
+
+// Generic message sending endpoint
+app.post('/api/message', async (req, res) => {
+  const { companyId, integrationType, recipient, message } = req.body;
+
+  if (!companyId || !integrationType || !recipient || !message) {
+    return res.status(400).json({ success: false, error: 'Missing required fields' });
+  }
+
+  try {
+    const manager = integrationManager.getInstance(companyId);
+
+    // Find the active integration ID
+    let integration;
+    if (integrationType === IntegrationType.WHATSAPP) {
+        integration = await prisma.whatsAppIntegration.findFirst({
+            where: { companyId, status: 'CONNECTED' },
+            orderBy: { createdAt: 'desc' }
+        });
+    } else if (integrationType === IntegrationType.TELEGRAM) {
+        integration = await prisma.telegramIntegration.findFirst({
+            where: { companyId, status: 'CONNECTED' },
+            orderBy: { createdAt: 'desc' }
+        });
+    }
+
+    if (!integration) {
+        return res.status(404).json({ success: false, error: 'Active integration not found' });
+    }
+
+    const result = await manager.sendMessage(integration.id, integrationType, recipient, message);
+    res.json(result);
+  } catch (error) {
+    console.error(`Error sending message via ${integrationType}:`, error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Простая страница для тестирования
 app.get('/', (req, res) => {
@@ -110,8 +150,10 @@ app.get('/', (req, res) => {
                 log('🚀 Инициализация WhatsApp клиента для ' + currentCompanyId);
                 
                 try {
-                    const response = await fetch('/api/whatsapp/initialize/' + currentCompanyId, {
-                        method: 'POST'
+                    const response = await fetch('/api/integrations/whatsapp/connect', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ companyId: currentCompanyId })
                     });
                     const result = await response.json();
                     
@@ -131,17 +173,17 @@ app.get('/', (req, res) => {
                 updateCompanyId();
                 
                 try {
-                    const response = await fetch('/api/whatsapp/status/' + currentCompanyId);
+                    const response = await fetch('/api/integrations/whatsapp/status?companyId=' + currentCompanyId);
                     const result = await response.json();
                     
                     const statusDiv = document.getElementById('status');
                     
                     if (result.success) {
-                        statusDiv.className = 'status ' + (result.connected ? 'connected' : 'disconnected');
-                        let statusText = 'Статус: ' + result.status;
+                        statusDiv.className = 'status ' + (result.integration.status === 'CONNECTED' ? 'connected' : 'disconnected');
+                        let statusText = 'Статус: ' + result.integration.connectionStatus;
                         
-                        if (result.info) {
-                            statusText += ' - ' + result.info.pushname + ' (' + result.info.phone + ')';
+                        if (result.integration.displayName) {
+                            statusText += ' - ' + result.integration.displayName + ' (' + result.integration.phoneNumber + ')';
                         }
                         
                         statusDiv.textContent = statusText;
@@ -190,13 +232,15 @@ app.get('/', (req, res) => {
                 log('📤 Отправка сообщения на ' + phoneNumber);
                 
                 try {
-                    const response = await fetch('/api/whatsapp/send/' + currentCompanyId, {
+                    const response = await fetch('/api/message', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({
-                            phoneNumber: phoneNumber,
+                            companyId: currentCompanyId,
+                            integrationType: 'WHATSAPP',
+                            recipient: phoneNumber,
                             message: message
                         })
                     });
@@ -215,47 +259,11 @@ app.get('/', (req, res) => {
             
             async function getChats() {
                 updateCompanyId();
-                log('📂 Получение списка чатов...');
-                
-                try {
-                    const response = await fetch('/api/whatsapp/chats/' + currentCompanyId);
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        log('✅ Получено ' + result.chats.length + ' чатов:');
-                        result.chats.slice(0, 5).forEach((chat, i) => {
-                            log('  ' + (i+1) + '. ' + chat.name + ' (' + (chat.isGroup ? 'Группа' : 'Личный') + ')');
-                        });
-                    } else {
-                        log('❌ Ошибка получения чатов: ' + result.error);
-                    }
-                } catch (error) {
-                    log('❌ Сетевая ошибка получения чатов: ' + error.message);
-                }
+                log('📂 Получение списка чатов... (не реализовано)');
             }
             
             async function getAllStats() {
-                log('📊 Получение статистики всех клиентов...');
-                
-                try {
-                    const response = await fetch('/api/whatsapp/stats');
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        const clientsCount = Object.keys(result.stats).length;
-                        log('✅ Активных клиентов: ' + clientsCount);
-                        
-                        for (const [companyId, stats] of Object.entries(result.stats)) {
-                            const status = stats.connected ? '✅' : '❌';
-                            const qr = stats.hasQR ? '📱' : '';
-                            log('  ' + companyId.slice(-8) + ': ' + status + ' ' + stats.status + ' ' + qr);
-                        }
-                    } else {
-                        log('❌ Ошибка получения статистики: ' + result.error);
-                    }
-                } catch (error) {
-                    log('❌ Сетевая ошибка статистики: ' + error.message);
-                }
+                log('📊 Получение статистики всех клиентов... (не реализовано)');
             }
             
             async function disconnect() {
@@ -268,8 +276,10 @@ app.get('/', (req, res) => {
                 log('🗑️ Отключение клиента...');
                 
                 try {
-                    const response = await fetch('/api/whatsapp/disconnect/' + currentCompanyId, {
-                        method: 'DELETE'
+                    const response = await fetch('/api/integrations/whatsapp/disconnect', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ companyId: currentCompanyId })
                     });
                     const result = await response.json();
                     
@@ -287,7 +297,6 @@ app.get('/', (req, res) => {
             
             // Проверяем статус при загрузке страницы
             checkStatus();
-            getAllStats();
         </script>
     </body>
     </html>
